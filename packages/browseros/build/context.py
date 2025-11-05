@@ -133,14 +133,6 @@ class BuildContext:
         """Get copy resources configuration file"""
         return join_paths(self.get_config_dir(), "copy_resources.yaml")
 
-    def get_patches_dir(self) -> Path:
-        """Get patches directory"""
-        return join_paths(self.root_dir, "patches")
-
-    def get_nxtscape_patches_dir(self) -> Path:
-        """Get Nxtscape specific patches directory"""
-        return join_paths(self.get_patches_dir(), "browseros")
-
     def get_sparkle_dir(self) -> Path:
         """Get Sparkle directory"""
         return join_paths(self.chromium_src, "third_party", "sparkle")

@@ -1,0 +1,42 @@
+name: Update Agent Submodule
+
+on:
+  schedule:
+    # Run every hour
+    - cron: "0 * * * *"
+  # Allow manual triggering for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: submodule-update
+  cancel-in-progress: false
+
+jobs:
+  update-submodule:
+    runs-on: ubuntu-latest
+    # Only run on the main repository, not on forks
+    if: github.repository == 'browseros-ai/BrowserOS'
+
+    steps:
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "Felarof"
+          git config user.email "nithin.sonti@gmail.com"
+
+      - name: Update agent submodule
+        run: |
+          chmod +x scripts/submodule-update.sh
+          ./scripts/submodule-update.sh main
+
+      - name: Push changes
+        run: |
+          git push origin main

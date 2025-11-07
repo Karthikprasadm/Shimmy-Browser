@@ -8,13 +8,14 @@ icon: "robot"
 
 <Steps>
   <Step title="Navigate to AI Settings">
-    Navigate to `chrome://settings/browseros-ai` to add Ollama as a provider.
+    Navigate to `chrome://settings/browseros` to add Ollama as a provider.
   </Step>
   <Step title="Get Model ID">
     Get the model ID of your Ollama model (e.g., `gpt-oss:20b`)
   </Step>
   <Step title="Start Ollama Server">
     Start Ollama with CORS enabled:
+
     ```bash
     OLLAMA_ORIGINS="*" ollama serve
     ```
@@ -25,7 +26,7 @@ icon: "robot"
 </Steps>
 
 <Warning>
-If you don't want to run from CLI with CORS settings, we recommend using LM Studio instead. See the [LM Studio setup guide](/local-LLMs/lm-studio).
+  If you don't want to run from CLI with CORS settings, we recommend using LM Studio instead. See the [LM Studio setup guide](/local-LLMs/lm-studio).
 </Warning>
 
 ## Detailed Visual Guide
@@ -35,7 +36,7 @@ If you don't want to run from CLI with CORS settings, we recommend using LM Stud
 Navigate to the BrowserOS AI settings page at `chrome://settings/browseros-ai`
 
 <Frame>
-  <img src="/images/setting-up-ollama/ollama-step1.png" alt="Navigate to settings page" />
+  ![Navigate to settings page](/images/setting-up-ollama/ollama-step1.png)
 </Frame>
 
 ### Step 2: Get the Ollama Model ID
@@ -43,7 +44,7 @@ Navigate to the BrowserOS AI settings page at `chrome://settings/browseros-ai`
 Identify and copy your Ollama model ID for configuration.
 
 <Frame>
-  <img src="/images/setting-up-ollama/ollama-step2.png" alt="Get the ollama model ID" />
+  ![Get the ollama model ID](/images/setting-up-ollama/ollama-step2.png)
 </Frame>
 
 ### Step 3: Start Ollama from CLI
@@ -55,11 +56,11 @@ OLLAMA_ORIGINS="*" ollama serve
 ```
 
 <Note>
-Unfortunately, Ollama by default doesn't allow requests from other apps without this configuration.
+  Unfortunately, Ollama by default doesn't allow requests from other apps without this configuration.
 </Note>
 
 <Frame>
-  <img src="/images/setting-up-ollama/ollama-step3.png" alt="Start Ollama from CLI" />
+  ![Start Ollama from CLI](/images/setting-up-ollama/ollama-step3.png)
 </Frame>
 
 ### Step 4: Use the Model
@@ -67,7 +68,7 @@ Unfortunately, Ollama by default doesn't allow requests from other apps without 
 Select the model in the Agent dropdown and start using it! 🚀
 
 <Frame>
-  <img src="/images/setting-up-ollama/ollama-step4.png" alt="Use the model" />
+  ![Use the model](/images/setting-up-ollama/ollama-step4.png)
 </Frame>
 
 ## Alternative: LM Studio

@@ -11,53 +11,48 @@ icon: "desktop"
     Open LM Studio, navigate to the **Developer** page and select the desired model to load.
 
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step1.png" alt="Open LM Studio" />
+      ![Open LM Studio](/images/setting-up-lm-studio/lmstudio-step1.png)
     </Frame>
   </Step>
-
   <Step title="Load the Model">
     In this example, we're loading the `openai/gpt-oss-20b` model.
 
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step2.png" alt="Load the model" />
+      ![Load the model](/images/setting-up-lm-studio/lmstudio-step2.png)
     </Frame>
   </Step>
-
   <Step title="Configure in BrowserOS">
-    - Navigate to `chrome://settings/browseros-ai` or go to **Settings → BrowserOS AI**
+    - Navigate to `chrome://settings/browseros` or go to **Settings → BrowserOS AI**
     - Click **Add Provider**
     - Select **OpenAI Compatible** in the Provider Type dropdown
 
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step3.png" alt="Configure in BrowserOS" />
+      ![Configure in BrowserOS](/images/setting-up-lm-studio/lmstudio-step3.png)
     </Frame>
   </Step>
-
   <Step title="Configure the Model">
     - Replace the Base URL with LM Studio URL (default: `http://localhost:1234/v1/`)
     - Set the Model ID to the one you loaded in LM Studio
     - **Important:** Set the **Context Window Size** to match your LM Studio configuration
 
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step4-1.png" alt="Configure Base URL" />
+      ![Configure Base URL](/images/setting-up-lm-studio/lmstudio-step4-1.png)
     </Frame>
-
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step4-2.png" alt="Configure Context Window" />
+      ![Configure Context Window](/images/setting-up-lm-studio/lmstudio-step4-2.png)
     </Frame>
   </Step>
-
   <Step title="Use the Model">
     Select the model in BrowserOS agent and start using it! 🎉
 
     <Frame>
-      <img src="/images/setting-up-lm-studio/lmstudio-step5.png" alt="Use the model in BrowserOS" />
+      ![Use the model in BrowserOS](/images/setting-up-lm-studio/lmstudio-step5.png)
     </Frame>
   </Step>
 </Steps>
 
 <Warning>
-Ensure the Context Window Size in BrowserOS matches what you configured in LM Studio to avoid issues with long conversations.
+  Ensure the Context Window Size in BrowserOS matches what you configured in LM Studio to avoid issues with long conversations.
 </Warning>
 
 ## Configuration Details
@@ -70,6 +65,7 @@ Ensure the Context Window Size in BrowserOS matches what you configured in LM St
 
 <Accordion title="Supported Models">
   LM Studio supports various models including:
+
   - OpenAI GPT-OSS series
   - LLaMA and derivatives
   - Mistral models

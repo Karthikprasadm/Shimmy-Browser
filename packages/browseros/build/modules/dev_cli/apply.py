@@ -6,89 +6,11 @@ Simple and straightforward patch application with minimal error handling.
 
 import click
 import yaml
-import glob
 from pathlib import Path
-from typing import List, Tuple, Optional, Set
+from typing import List, Tuple, Optional
 from context import BuildContext
 from modules.dev_cli.utils import run_git_command, GitError
 from utils import log_info, log_error, log_success, log_warning
-
-
-# Helper Functions for Conflict Detection
-def detect_merge_conflicts(chromium_src: Path) -> List[str]:
-    """Detect files with merge conflict markers after git apply --3way.
-
-    Returns:
-        List of file paths with conflicts (relative to chromium_src)
-    """
-    result = run_git_command(["git", "status", "--porcelain"], cwd=chromium_src)
-    if result.returncode != 0:
-        return []
-
-    conflicted_files = []
-    for line in result.stdout.splitlines():
-        # UU = both modified (merge conflict)
-        # AA = both added
-        # DD = both deleted
-        if line.startswith("UU ") or line.startswith("AA ") or line.startswith("DD "):
-            conflicted_files.append(line[3:].strip())
-
-    return conflicted_files
-
-
-def find_reject_files(chromium_src: Path, existing_rej: Set[Path]) -> List[Path]:
-    """Find newly created .rej files after git apply --reject.
-
-    Args:
-        chromium_src: Chromium source directory
-        existing_rej: Set of .rej files that existed before the operation
-
-    Returns:
-        List of new .rej file paths
-    """
-    current_rej = set(chromium_src.glob("**/*.rej"))
-    new_rej = current_rej - existing_rej
-    return sorted(list(new_rej))
-
-
-def pause_for_conflict_resolution(
-    patch_name: str,
-    conflict_type: str,
-    conflicted_files: List[str]
-) -> bool:
-    """Pause and wait for user to resolve conflicts.
-
-    Args:
-        patch_name: Name of the patch that has conflicts
-        conflict_type: "merge" or "reject"
-        conflicted_files: List of files with conflicts
-
-    Returns:
-        True to continue, False to abort
-    """
-    print(f"\n{'='*60}")
-    if conflict_type == "merge":
-        print(f"CONFLICT: {patch_name}")
-    else:
-        print(f"REJECT FILES CREATED: {patch_name}")
-    print(f"{'='*60}\n")
-
-    if conflict_type == "merge":
-        print("Conflicted files:")
-        for f in conflicted_files:
-            print(f"  {f}")
-        print("\nFix conflicts and press Enter to continue...")
-    else:
-        print("Reject files:")
-        for f in conflicted_files:
-            print(f"  {f}")
-        print("\nManually apply the rejected hunks and press Enter to continue...")
-
-    input()  # Wait for Enter
-
-    # Optional confirmation
-    response = input("Continue? [y/n]: ").strip().lower()
-    return response == 'y'
 
 
 # Core Functions - Can be called programmatically or from CLI
@@ -122,16 +44,14 @@ def apply_single_patch(
     chromium_src: Path,
     dry_run: bool = False,
     relative_to: Optional[Path] = None,
-    interactive: bool = False,
 ) -> Tuple[bool, Optional[str]]:
-    """Apply a single patch file with enhanced conflict handling.
+    """Apply a single patch file.
 
     Args:
         patch_path: Path to the patch file
         chromium_src: Chromium source directory
         dry_run: If True, only check if patch would apply
         relative_to: Base path for displaying relative paths (optional)
-        interactive: If True, pause for conflict resolution
 
     Returns:
         Tuple of (success: bool, error_message: Optional[str])
@@ -149,105 +69,43 @@ def apply_single_patch(
         else:
             log_error(f"  ✗ Would fail: {display_path}")
             return False, result.stderr
+    else:
+        # Try standard apply first
+        result = run_git_command(
+            [
+                "git",
+                "apply",
+                "--ignore-whitespace",
+                "--whitespace=nowarn",
+                "-p1",
+                str(patch_path),
+            ],
+            cwd=chromium_src,
+        )
 
-    # Try standard apply first
-    result = run_git_command(
-        [
-            "git",
-            "apply",
-            "--ignore-whitespace",
-            "--whitespace=nowarn",
-            "-p1",
-            str(patch_path),
-        ],
-        cwd=chromium_src,
-    )
+        if result.returncode != 0:
+            # Try with 3-way merge
+            result = run_git_command(
+                [
+                    "git",
+                    "apply",
+                    "--ignore-whitespace",
+                    "--whitespace=nowarn",
+                    "-p1",
+                    "--3way",
+                    str(patch_path),
+                ],
+                cwd=chromium_src,
+            )
 
-    if result.returncode == 0:
-        log_success(f"  ✓ Applied: {display_path}")
-        return True, None
-
-    # Try with 3-way merge
-    result_3way = run_git_command(
-        [
-            "git",
-            "apply",
-            "--ignore-whitespace",
-            "--whitespace=nowarn",
-            "-p1",
-            "--3way",
-            str(patch_path),
-        ],
-        cwd=chromium_src,
-    )
-
-    # Check for merge conflicts even if --3way returned 0
-    conflicted_files = detect_merge_conflicts(chromium_src)
-
-    if conflicted_files:
-        # We have merge conflicts
-        if interactive:
-            if pause_for_conflict_resolution(str(display_path), "merge", conflicted_files):
-                log_success(f"  ✓ Applied with manual resolution: {display_path}")
-                return True, None
-            else:
-                log_error(f"  ✗ Aborted by user: {display_path}")
-                return False, "User aborted"
+        if result.returncode == 0:
+            log_success(f"  ✓ Applied: {display_path}")
+            return True, None
         else:
-            log_error(f"  ✗ Conflicts detected: {display_path}")
-            return False, f"Merge conflicts in {len(conflicted_files)} files"
-
-    if result_3way.returncode == 0:
-        # Applied successfully without conflicts
-        log_success(f"  ✓ Applied: {display_path}")
-        return True, None
-
-    # --3way failed completely, try --reject as fallback
-    # First, reset any partial changes from failed 3-way
-    run_git_command(["git", "checkout", "."], cwd=chromium_src)
-
-    # Track existing .rej files
-    existing_rej = set(chromium_src.glob("**/*.rej"))
-
-    # Try with --reject
-    result_reject = run_git_command(
-        [
-            "git",
-            "apply",
-            "--reject",
-            "--ignore-whitespace",
-            "--whitespace=nowarn",
-            "-p1",
-            str(patch_path),
-        ],
-        cwd=chromium_src,
-    )
-
-    # Find new .rej files
-    new_rej = find_reject_files(chromium_src, existing_rej)
-
-    if new_rej:
-        # Some hunks failed, created .rej files
-        if interactive:
-            rej_display = [str(p.relative_to(chromium_src)) for p in new_rej]
-            if pause_for_conflict_resolution(str(display_path), "reject", rej_display):
-                # Clean up .rej files after resolution
-                for rej_file in new_rej:
-                    rej_file.unlink(missing_ok=True)
-                log_success(f"  ✓ Applied with manual resolution: {display_path}")
-                return True, None
-            else:
-                log_error(f"  ✗ Aborted by user: {display_path}")
-                return False, "User aborted"
-        else:
-            log_error(f"  ✗ Reject files created: {display_path}")
-            return False, f"Created {len(new_rej)} .rej files"
-
-    # Complete failure
-    log_error(f"  ✗ Failed: {display_path}")
-    if result_reject.stderr:
-        log_error(f"    {result_reject.stderr}")
-    return False, result_reject.stderr
+            log_error(f"  ✗ Failed: {display_path}")
+            if result.stderr:
+                log_error(f"    {result.stderr}")
+            return False, result.stderr
 
 
 def create_patch_commit(
@@ -345,9 +203,9 @@ def process_patch_list(
             failed.append(display_name)
             continue
 
-        # Apply the patch with interactive conflict resolution
+        # Apply the patch
         success, error = apply_single_patch(
-            patch_path, chromium_src, dry_run, patches_dir, interactive=(interactive and not dry_run)
+            patch_path, chromium_src, dry_run, patches_dir
         )
 
         if success:
@@ -357,12 +215,27 @@ def process_patch_list(
         else:
             failed.append(display_name)
 
-            # If in interactive mode and user aborted, stop processing
-            if interactive and not dry_run and error == "User aborted":
-                log_info(
-                    f"Stopped. Applied: {applied}, Failed: {len(failed)}, Skipped: {skipped}"
-                )
-                return applied, failed
+            if interactive and not dry_run:
+                # Interactive error handling
+                log_error("\n" + "=" * 60)
+                log_error(f"Patch {display_name} failed to apply")
+
+                while True:
+                    choice = input(
+                        "\nOptions:\n  1) Continue with next patch\n  2) Abort\n  3) Fix manually and continue\nChoice (1-3): "
+                    ).strip()
+
+                    if choice == "1":
+                        break  # Continue to next patch
+                    elif choice == "2":
+                        raise RuntimeError(f"Aborted at patch: {display_name}")
+                    elif choice == "3":
+                        input("Fix the issue manually, then press Enter to continue...")
+                        applied += 1  # Count as applied since user fixed it
+                        failed.pop()  # Remove from failed list
+                        break
+                    else:
+                        log_error("Invalid choice.")
 
     return applied, failed
 
@@ -516,9 +389,8 @@ def apply_group():
 @apply_group.command(name="all")
 @click.option("--commit-each", is_flag=True, help="Create git commit after each patch")
 @click.option("--dry-run", is_flag=True, help="Test patches without applying")
-@click.option("--interactive/--no-interactive", default=True, help="Pause for conflict resolution")
 @click.pass_context
-def apply_all(ctx, commit_each, dry_run, interactive):
+def apply_all(ctx, commit_each, dry_run):
     """Apply all patches from chromium_src/
 
     \b
@@ -526,7 +398,6 @@ def apply_all(ctx, commit_each, dry_run, interactive):
       dev apply all
       dev apply all --commit-each
       dev apply all --dry-run
-      dev apply all --no-interactive
     """
     chromium_src = ctx.parent.obj.get("chromium_src")
 
@@ -536,7 +407,7 @@ def apply_all(ctx, commit_each, dry_run, interactive):
     if not build_ctx:
         return
 
-    applied, failed = apply_all_patches(build_ctx, commit_each, dry_run, interactive)
+    applied, failed = apply_all_patches(build_ctx, commit_each, dry_run)
 
     # Exit with error code if any patches failed
     if failed:

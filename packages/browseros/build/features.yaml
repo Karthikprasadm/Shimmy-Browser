@@ -1,16 +1,16 @@
 version: '1.0'
 features:
-  browseros-add-sparkle-info-plist-keys:
+  add-sparkle-info-plist-keys:
     description: 'patch: app-info.plist changes'
     files:
     - chrome/app/app-Info.plist
-  browseros-adding-new-vector-icons:
+  adding-new-vector-icons:
     description: 'patch: adding-new-vector-icons'
     files:
     - components/vector_icons/BUILD.gn
     - components/vector_icons/chat_orange.icon
     - components/vector_icons/clash_of_gpts.icon
-  browseros-branding-file-updates:
+  branding-file-updates:
     description: browseros branding for file paths
     files:
     - chrome/common/chrome_constants.cc
@@ -18,7 +18,39 @@ features:
     - chrome/install_static/chromium_install_modes.cc
     - chrome/install_static/chromium_install_modes.h
     - components/os_crypt/sync/keychain_password_mac.mm
-  browseros-browseros-ai-settings-page:
+  branding-resources:
+    description: browseros branding resources and assets
+    files:
+    - chrome/app/chromium_strings.grd
+    - chrome/app/settings_chromium_strings.grdp
+    - chrome/app/theme/chromium/BRANDING
+    - chrome/app/theme/chromium/chromeos/
+    - chrome/app/theme/chromium/chromium.ai
+    - chrome/app/theme/chromium/linux/
+    - chrome/app/theme/chromium/mac/
+    - chrome/app/theme/chromium/product_logo.ai
+    - chrome/app/theme/chromium/product_logo.svg
+    - chrome/app/theme/chromium/product_logo.png
+    - chrome/app/theme/chromium/product_logo_16.png
+    - chrome/app/theme/chromium/product_logo_22.png
+    - chrome/app/theme/chromium/product_logo_22_mono.png
+    - chrome/app/theme/chromium/product_logo_24.png
+    - chrome/app/theme/chromium/product_logo_32.png
+    - chrome/app/theme/chromium/product_logo_48.png
+    - chrome/app/theme/chromium/product_logo_64.png
+    - chrome/app/theme/chromium/product_logo_128.png
+    - chrome/app/theme/chromium/product_logo_192.png
+    - chrome/app/theme/chromium/product_logo_256.png
+    - chrome/app/theme/chromium/product_logo_animation.svg
+    - chrome/app/theme/chromium/product_logo_name_22.png
+    - chrome/app/theme/chromium/product_logo_name_22_2x.png
+    - chrome/app/theme/chromium/product_logo_name_22_white.png
+    - chrome/app/theme/chromium/product_logo_name_22_white_2x.png
+    - chrome/app/theme/chromium/win/
+    - chrome/app/theme/default_100_percent/chromium/
+    - chrome/app/theme/default_200_percent/chromium/
+    - chrome/enterprise_companion/branding.gni
+  ai-settings-page:
     description: llm settings page
     files:
     - chrome/browser/extensions/api/settings_private/prefs_util.cc
@@ -34,7 +66,7 @@ features:
     - chrome/browser/resources/settings/settings_main/settings_main.ts
     - chrome/browser/resources/settings/settings_menu/settings_menu.html
     - chrome/common/pref_names.h
-  browseros-browseros-api:
+  api:
     description: browseros API
     files:
     - chrome/browser/extensions/BUILD.gn
@@ -51,6 +83,7 @@ features:
     - chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.cc
     - chrome/browser/extensions/api/browser_os/browser_os_snapshot_processor.h
     - chrome/browser/extensions/chrome_extensions_browser_api_provider.cc
+    - chrome/browser/media/extension_media_access_handler.cc
     - chrome/common/extensions/api/_api_features.json
     - chrome/common/extensions/api/_permission_features.json
     - chrome/common/extensions/api/api_sources.gni
@@ -59,7 +92,12 @@ features:
     - extensions/browser/extension_function_histogram_value.h
     - extensions/common/mojom/api_permission_id.mojom
     - tools/metrics/histograms/metadata/extensions/enums.xml
-  browseros-browseros-metrics:
+  server:
+    description: browseros server
+    files:
+    - chrome/browser/browseros_server/
+    - base/threading/thread_restrictions.h
+  metrics:
     description: browseros metrics
     files:
     - chrome/browser/metrics/chrome_metrics_service_client.cc
@@ -80,7 +118,7 @@ features:
     - components/metrics/browseros_metrics/browseros_metrics_service.h
     - components/metrics/browseros_metrics/browseros_metrics_service_factory.cc
     - components/metrics/browseros_metrics/browseros_metrics_service_factory.h
-  browseros-browseros-ota-updater:
+  ota-updater:
     description: extensions ota updater
     files:
     - chrome/browser/extensions/BUILD.gn
@@ -92,7 +130,7 @@ features:
     - chrome/browser/extensions/extension_web_ui_override_registrar.cc
     - chrome/browser/extensions/external_provider_impl.cc
     - chrome/browser/ui/extensions/settings_overridden_params_providers.cc
-  browseros-chrome-importer:
+  chrome-importer:
     description: chrome importer
     files:
     - chrome/app/generated_resources.grd
@@ -124,40 +162,40 @@ features:
     - chrome/utility/importer/external_process_importer_bridge.h
     - chrome/utility/importer/importer_creator.cc
     - tools/metrics/histograms/metadata/sql/histograms.xml
-  browseros-chrome-version-updater:
+  chrome-version-updater:
     description: 'patch: chrome version update'
     files:
     - chrome/VERSION
-  browseros-disable-chrome-labs-pinning:
+  disable-chrome-labs-pinning:
     description: 'patch: disable-chrome-labs-pinning'
     files:
     - chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
     - chrome/browser/ui/toolbar/toolbar_pref_names.cc
-  browseros-disable-google-key-info-bar:
+  disable-google-key-info-bar:
     description: 'patch: disable-google-key-info-bar'
     files:
     - chrome/browser/ui/startup/google_api_keys_infobar_delegate.cc
-  browseros-disable-info-bar-in-cdp:
+  disable-info-bar-in-cdp:
     description: 'patch: disable-info-bar-in-cdp'
     files:
     - chrome/browser/extensions/api/debugger/debugger_api.cc
-  browseros-disable-sidepanel-animation:
+  disable-sidepanel-animation:
     description: disable sidepanel animation
     files:
     - chrome/browser/ui/views/side_panel/side_panel.cc
     - chrome/browser/ui/views/side_panel/side_panel.h
-  browseros-disable-user-gesture-restriction-on-sidepanel:
+  disable-user-gesture-restriction-on-sidepanel:
     description: 'patch: disable-user-gesture-restriction-on-sidepanel'
     files:
     - chrome/browser/extensions/api/side_panel/side_panel_api.cc
-  browseros-first-run:
+  first-run:
     description: first run
     files:
     - chrome/browser/chrome_browser_main.cc
     - chrome/browser/ui/webui/chrome_web_ui_configs.cc
     - chrome/browser/ui/webui/nxtscape_first_run.h
     - chrome/common/webui_url_constants.cc
-  browseros-llm-chat:
+  llm-chat:
     description: llm chat and updates
     files:
     - chrome/app/chrome_command_ids.h
@@ -181,7 +219,7 @@ features:
     - chrome/browser/ui/views/side_panel/third_party_llm/third_party_llm_view.h
     - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
     - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
-  browseros-llm-hub:
+  llm-hub:
     description: llm-hub
     files:
     - chrome/app/chrome_command_ids.h
@@ -212,7 +250,7 @@ features:
     - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
     - chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
     - chrome/common/webui_url_constants.h
-  browseros-llm-settings-page-updates:
+  llm-settings-page-updates:
     description: 'llm settings page: updates'
     files:
     - chrome/browser/resources/settings/BUILD.gn
@@ -220,7 +258,7 @@ features:
     - chrome/browser/resources/settings/nxtscape_page/models_data.ts
     - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.html
     - chrome/browser/resources/settings/nxtscape_page/nxtscape_page.ts
-  browseros-mac-sparkle-updater:
+  mac-sparkle-updater:
     description: 'patch: nxtscape-updater-sparkle'
     files:
     - chrome/BUILD.gn
@@ -235,8 +273,8 @@ features:
     - chrome/browser/ui/webui/help/sparkle_version_updater_mac.h
     - chrome/browser/ui/webui/help/sparkle_version_updater_mac.mm
     - chrome/browser/ui/webui/help/version_updater_mac.mm
-    - third_party/sparkle/BUILD.gn
-  browseros-pin-chat-and-hub:
+    - third_party/sparkle/
+  pin-chat-and-hub:
     description: pin browseros native panels
     files:
     - chrome/browser/extensions/browseros_extension_constants.h
@@ -248,7 +286,7 @@ features:
     - chrome/browser/ui/toolbar/toolbar_pref_names.h
     - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
     - chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
-  browseros-pin-extensions-toolbar:
+  pin-extensions-toolbar:
     description: pin browseros extensions to extension toolbar
     files:
     - chrome/browser/extensions/browseros_extension_constants.h
@@ -257,7 +295,7 @@ features:
     - chrome/browser/ui/actions/browseros_actions_config.h
     - chrome/browser/ui/toolbar/toolbar_actions_model.cc
     - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
-  browseros-preferences-settings-page:
+  preferences-settings-page:
     description: 'patch: settings prefs page'
     files:
     - chrome/browser/extensions/api/settings_private/prefs_util.cc
@@ -274,3 +312,14 @@ features:
     - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
     - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
     - chrome/common/pref_names.h
+  misc:
+    description: miscellaneous patches
+    files:
+    - chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+    - chrome/browser/ui/profiles/profile_error_dialog.cc
+    - chrome/browser/ui/startup/infobar_utils.cc
+    - chrome/installer/mini_installer/chrome.release
+    - chrome/updater/branding.gni
+    - extensions/browser/process_manager.cc
+    - extensions/browser/process_manager.h
+    - third_party/blink/renderer/core/frame/navigator.cc

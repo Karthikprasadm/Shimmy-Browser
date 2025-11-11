@@ -134,7 +134,7 @@ def process_features(chromium_src: Path, features_file: Path) -> int:
         log_info(f"   Found {len(modified_files)} modified file(s)")
 
         # Create commit message
-        commit_message = f"{description}"
+        commit_message = f"{feature_name}: {description}"
 
         # Add and commit
         if git_add_and_commit(chromium_src, modified_files, commit_message):

@@ -118,14 +118,6 @@ We'd love your help making BrowserOS better!
 - 💬 [Join Discord](https://discord.gg/YKwjt5vuKr)
 - 🐦 [Follow on Twitter](https://x.com/browserOS_ai)
 
-## Credits
-
-### ungoogled-chromium
-BrowserOS uses some patches from [ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium) for enhanced privacy. Thanks to everyone behind this project!
-
-### The Chromium Project
-[The Chromium Project](https://www.chromium.org/) is at the core of BrowserOS, making it possible to exist in the first place.
-
 ## License
 
 BrowserOS is open source under the [AGPL-3.0 license](LICENSE).
@@ -140,3 +132,8 @@ Thank you to all our supporters!
 <p align="center">
 Built with ❤️ from San Francisco
 </p>
+
+## Credits
+
+- [ungoogled-chromium](https://github.com/ungoogled-software/ungoogled-chromium) - BrowserOS uses some patches for enhanced privacy. Thanks to everyone behind this project!
+- [The Chromium Project](https://www.chromium.org/) - At the core of BrowserOS, making it possible to exist in the first place.

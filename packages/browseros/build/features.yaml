@@ -318,7 +318,7 @@ features:
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h
       - chrome/common/pref_names.h
-  ui fixes:
+  ui-fixes:
     description: "patch: chromium ui fixes"
     files:
       - chrome/browser/chrome_content_browser_client.cc
@@ -329,10 +329,13 @@ features:
       - chrome/browser/ui/browser_ui_prefs.cc
       - chrome/browser/ui/views/chrome_layout_provider.cc
       - chrome/browser/ui/views/infobars/infobar_container_view.cc
+      - chrome/browser/ui/views/new_tab_footer/
+      - chrome/browser/ui/webui/new_tab_footer/
       - components/bookmarks/browser/bookmark_utils.cc
       - components/content_settings/core/browser/cookie_settings.cc
       - components/payments/core/payment_prefs.cc
       - components/performance_manager/user_tuning/prefs.cc
+      - components/search/ntp_features.cc
   browseros-version:
     description: "patch: browseros version"
     files:

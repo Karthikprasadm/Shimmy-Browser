@@ -8,7 +8,7 @@ from typing import Iterator
 
 from ...common.module import CommandModule, ValidationError
 from ...common.context import Context
-from ...common.utils import log_info, log_success, log_error
+from ...common.utils import log_info, log_success, log_error, get_platform
 
 
 ENCODING = "UTF-8"
@@ -67,6 +67,32 @@ def parse_series(series_path: Path) -> Iterator[str]:
             yield line
 
 
+def get_series_files(series_dir: Path) -> list[Path]:
+    """
+    Get all applicable series files for the current platform.
+
+    Returns series files in order:
+    1. series (common, always applied)
+    2. series.{platform} (platform-specific: windows, linux, macos)
+
+    Only returns files that exist.
+    """
+    files = []
+
+    # Common series file (always)
+    common = series_dir / "series"
+    if common.exists():
+        files.append(common)
+
+    # Platform-specific series file
+    platform = get_platform()  # "windows", "linux", or "macos"
+    platform_file = series_dir / f"series.{platform}"
+    if platform_file.exists():
+        files.append(platform_file)
+
+    return files
+
+
 def apply_single_patch(patch_path: Path, chromium_src: Path) -> tuple[bool, str]:
     """
     Apply a single patch using git apply.
@@ -120,7 +146,7 @@ def apply_series_patches_impl(
     dry_run: bool = False
 ) -> tuple[list[Path], list[Path]]:
     """
-    Apply all patches listed in the series file.
+    Apply all patches listed in series files (common + platform-specific).
 
     Args:
         ctx: Build context
@@ -130,22 +156,31 @@ def apply_series_patches_impl(
         (applied_patches, failed_patches)
     """
     series_dir = ctx.get_series_patches_dir()
-    series_file = series_dir / "series"
     chromium_src = ctx.chromium_src
 
-    patch_paths = list(parse_series(series_file))
-    total = len(patch_paths)
-
-    if total == 0:
-        log_info("  No patches listed in series file")
+    series_files = get_series_files(series_dir)
+    if not series_files:
+        log_info("  No series files found")
         return [], []
 
-    log_info(f"  Found {total} patches in series file")
+    # Collect all patches from all series files
+    all_patches: list[tuple[str, Path]] = []  # (relative_path, series_file)
+    for series_file in series_files:
+        for relative_path in parse_series(series_file):
+            all_patches.append((relative_path, series_file))
+
+    total = len(all_patches)
+    if total == 0:
+        log_info("  No patches listed in series files")
+        return [], []
+
+    platform = get_platform()
+    log_info(f"  Found {total} patches for platform '{platform}' across {len(series_files)} series file(s)")
 
     applied = []
     failed = []
 
-    for i, relative_path in enumerate(patch_paths, 1):
+    for i, (relative_path, series_file) in enumerate(all_patches, 1):
         patch_path = series_dir / relative_path
 
         if not patch_path.exists():
@@ -154,7 +189,6 @@ def apply_series_patches_impl(
             continue
 
         if dry_run:
-            # Dry run: check if patch would apply
             cmd = [
                 "git", "apply",
                 "--check",

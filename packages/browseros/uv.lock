@@ -36,7 +36,7 @@ wheels = [
 
 [[package]]
 name = "browseros"
-version = "0.29.0"
+version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

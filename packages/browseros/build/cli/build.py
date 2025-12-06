@@ -398,7 +398,7 @@ def main(
 
     # Resolve build context (CONFIG mode or DIRECT mode)
     try:
-        ctx = resolve_config(cli_args, config_data, root_dir=root_dir)
+        ctx = resolve_config(cli_args, config_data)
     except ValueError as e:
         log_error(str(e))
         raise typer.Exit(1)

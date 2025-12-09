@@ -15,12 +15,14 @@ from .list import ListModule
 from .appcast import AppcastModule
 from .github import GithubModule
 from .publish import PublishModule
+from .download import DownloadModule
 
 AVAILABLE_MODULES = {
     "list": ListModule,
     "appcast": AppcastModule,
     "github": GithubModule,
     "publish": PublishModule,
+    "download": DownloadModule,
 }
 
 __all__ = [
@@ -36,5 +38,6 @@ __all__ = [
     "AppcastModule",
     "GithubModule",
     "PublishModule",
+    "DownloadModule",
     "AVAILABLE_MODULES",
 ]

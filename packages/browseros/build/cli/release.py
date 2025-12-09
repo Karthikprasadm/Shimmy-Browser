@@ -16,6 +16,7 @@ from ..modules.release import (
     AppcastModule,
     GithubModule,
     PublishModule,
+    DownloadModule,
 )
 
 app = typer.Typer(
@@ -77,6 +78,12 @@ def main(
     publish: bool = typer.Option(
         False, "--publish", "-p", help="Publish to download/ paths (make live)"
     ),
+    download: bool = typer.Option(
+        False, "--download", "-d", help="Download artifacts to temp directory"
+    ),
+    os_filter: Optional[str] = typer.Option(
+        None, "--os", help="Filter by OS: macos, windows, linux"
+    ),
     show_modules: bool = typer.Option(
         False, "--show-modules", help="Show available modules and exit"
     ),
@@ -88,6 +95,8 @@ def main(
       browseros release --version 0.31.0 --list       # List artifacts
       browseros release --version 0.31.0 --appcast    # Generate appcast XML
       browseros release --version 0.31.0 --publish    # Publish to download/ paths
+      browseros release --version 0.31.0 --download   # Download all artifacts
+      browseros release --version 0.31.0 --download --os macos  # Download macOS only
 
     \b
     GitHub Release (Sub-command):
@@ -111,11 +120,11 @@ def main(
         return
 
     # Check if any flags specified
-    has_flags = any([list_artifacts, appcast, publish])
+    has_flags = any([list_artifacts, appcast, publish, download])
 
     if not has_flags:
         typer.echo(
-            "Error: Specify a flag (--list, --appcast, --publish) or use a sub-command\n"
+            "Error: Specify a flag (--list, --appcast, --publish, --download) or use a sub-command\n"
         )
         typer.echo("Use --help for usage information")
         typer.echo("Use --show-modules to see available modules")
@@ -141,6 +150,10 @@ def main(
     if publish:
         log_info(f"🚀 Publishing v{version} to download/ paths")
         execute_module(release_ctx, PublishModule())
+
+    if download:
+        log_info(f"📥 Downloading artifacts for v{version}")
+        execute_module(release_ctx, DownloadModule(os_filter=os_filter))
 
 
 @github_app.command("create")

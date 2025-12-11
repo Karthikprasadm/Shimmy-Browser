@@ -25,7 +25,7 @@ npx n8n
 Access n8n at `http://localhost:5678` and complete the initial setup by creating an account.
 
 <Note>
-For global installation: `npm install n8n -g`, then run `n8n` anytime.
+  For global installation: `npm install n8n -g`, then run `n8n` anytime.
 </Note>
 
 ### Step 2: Install MCP Community Node
@@ -33,7 +33,7 @@ For global installation: `npm install n8n -g`, then run `n8n` anytime.
 Go to **Settings → Community Nodes** and install `n8n-nodes-mcp`:
 
 <Frame>
-  <img src="/images/n8n-node.png" alt="Install n8n-nodes-mcp community node" />
+  ![Install n8n-nodes-mcp community node](/images/n8n-node.png)
 </Frame>
 
 ### Step 3: Create Workflow
@@ -44,7 +44,7 @@ Create a new workflow and add the **AI Agent** node. Then configure it:
 2. In the AI Agent's **Tools** section, search for "mcp" and add **MCP Client Tool**
 
 <Frame>
-  <img src="/images/mcp-node.png" alt="Add MCP Client tool to AI Agent" />
+  ![Add MCP Client tool to AI Agent](/images/mcp-node.png)
 </Frame>
 
 ### Step 4: Configure AI Agent Prompt
@@ -56,7 +56,7 @@ choose the right tool based on the user input:{{ $json.chatInput }}
 ```
 
 <Frame>
-  <img src="/images/agent-step.png" alt="Configure AI Agent prompt" />
+  ![Configure AI Agent prompt](/images/agent-step.png)
 </Frame>
 
 ### Step 5: Configure MCP Client Credentials
@@ -69,7 +69,7 @@ Click on the **MCP Client** node to configure it:
 4. **Arguments**: `mcp-remote http://127.0.0.1:9101/mcp`
 
 <Note>
-Replace `9101` with your BrowserOS MCP port from **Settings → MCP** in BrowserOS.
+  Replace `9101` with your BrowserOS MCP port from **Settings → MCP** in BrowserOS.
 </Note>
 
 ### Step 6: Configure MCP Tool Execution
@@ -80,7 +80,7 @@ In the same MCP Client node:
 2. **Tool Name**: `{{ $fromAI("tool") }}`
 
 <Frame>
-  <img src="/images/client-step.png" alt="Configure MCP Client node" />
+  ![Configure MCP Client node](/images/client-step.png)
 </Frame>
 
 ### Step 7: Test Workflow
@@ -96,10 +96,11 @@ Execute and watch BrowserOS respond!
 ## Troubleshooting
 
 <Warning>
-Connection issues? Verify:
-- BrowserOS is running
-- MCP server is enabled in BrowserOS settings
-- Port number matches your BrowserOS MCP configuration
+  Connection issues? Verify:
+
+  - BrowserOS is running
+  - MCP server is enabled in BrowserOS settings
+  - Port number matches your BrowserOS MCP configuration
 </Warning>
 
 ## Resources

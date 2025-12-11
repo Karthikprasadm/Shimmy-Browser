@@ -63,6 +63,12 @@ def apply_single_patch(
         if file_exists_in_commit(file_path, reset_to, chromium_src):
             log_info(f"  Resetting to {reset_to[:8]}: {file_path}")
             reset_file_to_commit(file_path, reset_to, chromium_src)
+        else:
+            # File doesn't exist in target commit - delete it so patch can create fresh
+            target_file = chromium_src / file_path
+            if target_file.exists():
+                log_info(f"  Deleting (not in {reset_to[:8]}): {file_path}")
+                target_file.unlink()
 
     if dry_run:
         # Just check if patch would apply

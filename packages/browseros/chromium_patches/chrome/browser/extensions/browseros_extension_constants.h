@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/extensions/browseros_extension_constants.h b/chrome/browser/extensions/browseros_extension_constants.h
 new file mode 100644
-index 0000000000000..65020a43f27e1
+index 0000000000000..ae19be51c4e8b
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_extension_constants.h
 @@ -0,0 +1,226 @@
@@ -174,7 +174,7 @@ index 0000000000000..65020a43f27e1
 +};
 +
 +inline constexpr BrowserOSExtensionInfo kBrowserOSExtensions[] = {
-+    {kAgentV1ExtensionId, true, true},
++    {kAgentV1ExtensionId, true, false},
 +    {kAgentV2ExtensionId, false, false},
 +    {kBugReporterExtensionId, true, false},
 +    {kControllerExtensionId, false, false},

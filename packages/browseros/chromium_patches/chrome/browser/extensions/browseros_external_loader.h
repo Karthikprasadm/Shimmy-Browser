@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/browseros_external_loader.h b/chrome/browser/extensions/browseros_external_loader.h
 new file mode 100644
-index 0000000000000..d5e6384343492
+index 0000000000000..1c5dba065d91e
 --- /dev/null
 +++ b/chrome/browser/extensions/browseros_external_loader.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,131 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -92,6 +92,9 @@ index 0000000000000..d5e6384343492
 +  // Triggers immediate installation of all BrowserOS extensions on first start
 +  void TriggerImmediateInstallation();
 +
++  // Startup maintenance: uninstalls deprecated extensions, then triggers install
++  void StartupExtensionMaintenance();
++
 +  // Checks extension state and logs to metrics if not enabled
 +  void CheckAndLogExtensionState(const std::string& context);
 +
@@ -115,10 +118,10 @@ index 0000000000000..d5e6384343492
 +  // URLLoaderFactory for making network requests.
 +  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 +
-+  // List of BrowserOS extension IDs to monitor
-+  std::set<std::string> browseros_extension_ids_;
-+  
-+  // Last fetched config for comparison
++  // Extension IDs from server config (validated against master list)
++  std::set<std::string> server_extension_ids_;
++
++  // Last fetched config for comparison and update URLs
 +  base::Value::Dict last_config_;
 +
 +  // Tracks whether we have successfully applied a configuration during this session.

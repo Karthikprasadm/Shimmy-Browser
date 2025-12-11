@@ -1,6 +1,5 @@
 version: "1.0"
 features:
-  # BrowserOS patches
   chrome-version-updater:
     description: "chore: chrome version update"
     files:
@@ -367,12 +366,17 @@ features:
       - chrome/browser/profiles/profile_shortcut_manager_win.cc
       - chrome/browser/ui/views/frame/browser_desktop_window_tree_host_win.cc
       - chrome/browser/ui/views/frame/browser_window_property_manager_win.cc
-
-  # Third-party series patches (GNU Quilt format)
+  "feat: chromium urls for browseros":
+    description: "feat: feat: chromium urls for browseros"
+    files:
+      - chrome/browser/chrome_content_browser_client.cc
+      - chrome/browser/extensions/browseros_extension_constants.h
+      - chrome/browser/resources/settings/route.ts
+      - chrome/browser/resources/settings/router.ts
+      - chrome/browser/ui/browser_commands.cc
+      - chrome/browser/ui/omnibox/chrome_omnibox_client.cc
   extensions-manifestv2:
-    description: "feat: ungoogled-chromium manifest v2 extensions support"
-    series: series
-    patch: ungoogle-chromium/extensions-manifestv2.patch
+    description: "series: ungoogled-chromium manifest v2 extensions support"
     files:
       - chrome/browser/extensions/api/developer_private/extension_info_generator.cc
       - chrome/browser/extensions/extension_management.cc
@@ -380,35 +384,25 @@ features:
       - chrome/browser/ui/webui/extensions/extensions_ui.cc
       - extensions/common/extension.cc
   windows-disable-rcpy:
-    description: "build: windows disable rcpy"
-    series: series.windows
-    patch: windows/ungoogled-chromium/windows-disable-rcpy.patch
+    description: "series: windows disable rcpy"
     files:
       - build/toolchain/win/tool_wrapper.py
       - chrome/app/chrome_dll.rc
       - chrome/app/chrome_exe.rc
       - chrome/installer/setup/setup.rc
   windows-fix-rc:
-    description: "fix: windows rc resources"
-    series: series.windows
-    patch: windows/ungoogled-chromium/windows-fix-rc.patch
+    description: "series: windows rc resources"
     files:
       - chrome/browser/web_applications/chrome_pwa_launcher/chrome_pwa_launcher_exe.rc
   windows-fix-command-ids:
-    description: "fix: windows command ids"
-    series: series.windows
-    patch: windows/ungoogled-chromium/windows-fix-command-ids.patch
+    description: "series: windows command ids"
     files:
       - chrome/app/chrome_command_ids.h
   windows-disable-download-warning-prompt:
-    description: "fix: windows disable download warning prompt"
-    series: series.windows
-    patch: windows/ungoogled-chromium/windows-disable-download-warning-prompt.patch
+    description: "series: windows disable download warning prompt"
     files:
       - components/download/internal/common/download_item_impl.cc
   windows-fix-rc-terminating-error:
-    description: "fix: windows rc terminating error"
-    series: series.windows
-    patch: windows/ungoogled-chromium/windows-fix-rc-terminating-error.patch
+    description: "series: windows rc terminating error"
     files:
       - build/build_config.h

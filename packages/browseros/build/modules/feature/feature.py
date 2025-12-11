@@ -22,7 +22,7 @@ def add_feature(ctx: Context, feature_name: str, commit: str, description: Optio
     features_file = ctx.get_features_yaml_path()
 
     # Get changed files from commit
-    changed_files = get_commit_changed_files(ctx, commit)
+    changed_files = get_commit_changed_files(commit, ctx.chromium_src)
     if not changed_files:
         log_error(f"No changed files found in commit {commit}")
         return False

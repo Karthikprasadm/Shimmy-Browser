@@ -17,7 +17,8 @@
             "group": "Getting Started",
             "pages": [
               "index",
-              "onboarding"
+              "onboarding",
+              "update"
             ]
           },
           {

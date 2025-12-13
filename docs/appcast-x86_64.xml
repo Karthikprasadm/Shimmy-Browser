@@ -8,21 +8,21 @@
     <language>en</language>
 
     <!-- Updates -->
-    <!-- <item> -->
-    <!--   <title>BrowserOS - 0.31.0.14</title> -->
-    <!--   <description sparkle:format="plain-text"> -->
-    <!--   </description> -->
-    <!--   <sparkle:version>7535.49</sparkle:version> -->
-    <!--   <sparkle:shortVersionString>0.31.0.14</sparkle:shortVersionString> -->
-    <!--   <pubDate>Fri, 12 Dec 2025 02:34:49 +0000</pubDate> -->
-    <!--   <link>https://browseros.com</link> -->
-    <!--   <enclosure -->
-    <!--     url="http://cdn.browseros.com/releases/0.31.0.14/macos/BrowserOS_v0.31.0.14_x64.dmg" -->
-    <!--     sparkle:edSignature="2Wfs2WtzdTsLMe5g4wkgFtZ+CNwrWXyzQIQZf6F0jlZDrCEPJVzNsk8LQrClDui8nCXOYKlCvxbRVAwwu+EvAg==" -->
-    <!--     length="170790283" -->
-    <!--     type="application/octet-stream" /> -->
-    <!--   <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion> -->
-    <!-- </item> -->
+    <item>
+      <title>BrowserOS - 0.32.0.1</title>
+      <description sparkle:format="plain-text">
+      </description>
+      <sparkle:version>7536.49</sparkle:version>
+      <sparkle:shortVersionString>0.32.0.1</sparkle:shortVersionString>
+      <pubDate>Sat, 13 Dec 2025 01:49:10 +0000</pubDate>
+      <link>https://browseros.com</link>
+      <enclosure
+        url="http://cdn.browseros.com/releases/0.32.0.1/macos/BrowserOS_v0.32.0.1_x64.dmg"
+        sparkle:edSignature="Bdh5aYC4s2G0PNA7HxDHoN0K/kvH+1cDxVr8TAeCBuSBPkEgJojLOGRwr9AbHpzSVd1CpVEBM5idHMGHWMz0CQ=="
+        length="171199091"
+        type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+    </item>
     <item>
       <title>BrowserOS - 0.31.0.7</title>
       <description sparkle:format="plain-text">

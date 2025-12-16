@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.h b/chrome/browser/browseros_server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..0f6ff92facf88
+index 0000000000000..1c58d85224b98
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.h
-@@ -0,0 +1,131 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -12,6 +12,7 @@ index 0000000000000..0f6ff92facf88
 +#define CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_MANAGER_H_
 +
 +#include <memory>
++#include <set>
 +
 +#include "base/files/file.h"
 +#include "base/files/file_path.h"
@@ -107,7 +108,9 @@ index 0000000000000..0f6ff92facf88
 +  base::FilePath GetBrowserOSServerResourcesPath() const;
 +  base::FilePath GetBrowserOSExecutionDir() const;
 +  base::FilePath GetBrowserOSServerExecutablePath() const;
-+  int FindAvailablePort(int starting_port);
++  // Finds an available port starting from starting_port, excluding ports
++  // already assigned to other services to prevent collisions.
++  int FindAvailablePort(int starting_port, const std::set<int>& excluded_ports);
 +  bool IsPortAvailable(int port);
 +
 +  base::File lock_file_;  // System-wide lock to ensure single instance

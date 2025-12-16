@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros_server/browseros_server_manager.cc b/chrome/browser/browseros_server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..8fe062bf92c25
+index 0000000000000..c7070f4975655
 --- /dev/null
 +++ b/chrome/browser/browseros_server/browseros_server_manager.cc
-@@ -0,0 +1,959 @@
+@@ -0,0 +1,975 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,6 +11,7 @@ index 0000000000000..8fe062bf92c25
 +#include "chrome/browser/browseros_server/browseros_server_manager.h"
 +
 +#include <optional>
++#include <set>
 +
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
@@ -318,7 +319,7 @@ index 0000000000000..8fe062bf92c25
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +  PrefService* prefs = g_browser_process->local_state();
 +
-+  // STEP 1: Read from prefs or use defaults
++  // Read from prefs or use defaults
 +  if (!prefs) {
 +    cdp_port_ = browseros_server::kDefaultCDPPort;
 +    mcp_port_ = browseros_server::kDefaultMCPPort;
@@ -364,12 +365,22 @@ index 0000000000000..8fe062bf92c25
 +              base::Unretained(this)));
 +    }
 +  }
-+  cdp_port_ = FindAvailablePort(cdp_port_);
-+  mcp_port_ = FindAvailablePort(mcp_port_);
-+  agent_port_ = FindAvailablePort(agent_port_);
-+  extension_port_ = FindAvailablePort(extension_port_);
 +
-+  // STEP 3: Apply command-line overrides (these take highest priority)
++  // Find available ports, tracking assigned ports to prevent collisions
++  std::set<int> assigned_ports;
++
++  cdp_port_ = FindAvailablePort(cdp_port_, assigned_ports);
++  assigned_ports.insert(cdp_port_);
++
++  mcp_port_ = FindAvailablePort(mcp_port_, assigned_ports);
++  assigned_ports.insert(mcp_port_);
++
++  agent_port_ = FindAvailablePort(agent_port_, assigned_ports);
++  assigned_ports.insert(agent_port_);
++
++  extension_port_ = FindAvailablePort(extension_port_, assigned_ports);
++
++  // Apply command-line overrides (internal testing only)
 +  int cdp_override = GetPortOverrideFromCommandLine(
 +      command_line, "browseros-cdp-port", "CDP port");
 +  if (cdp_override > 0) {
@@ -812,22 +823,28 @@ index 0000000000000..8fe062bf92c25
 +  RestartBrowserOSProcess();
 +}
 +
-+int BrowserOSServerManager::FindAvailablePort(int starting_port) {
-+  LOG(INFO) << "browseros: Finding port starting from "
-+            << starting_port;
++int BrowserOSServerManager::FindAvailablePort(
++    int starting_port,
++    const std::set<int>& excluded_ports) {
++  LOG(INFO) << "browseros: Finding port starting from " << starting_port;
 +
 +  for (int i = 0; i < kMaxPortAttempts; i++) {
 +    int port_to_try = starting_port + i;
 +
-+    // Don't exceed max valid port number
 +    if (port_to_try > kMaxPort) {
 +      break;
++    }
++
++    // Skip ports already assigned to other BrowserOS services
++    if (excluded_ports.count(port_to_try) > 0) {
++      continue;
 +    }
 +
 +    if (IsPortAvailable(port_to_try)) {
 +      if (port_to_try != starting_port) {
 +        LOG(INFO) << "browseros: Port " << starting_port
-+                  << " was in use, using " << port_to_try << " instead";
++                  << " was in use or excluded, using " << port_to_try
++                  << " instead";
 +      } else {
 +        LOG(INFO) << "browseros: Using port " << port_to_try;
 +      }
@@ -835,7 +852,6 @@ index 0000000000000..8fe062bf92c25
 +    }
 +  }
 +
-+  // Fallback to starting port if we couldn't find anything
 +  LOG(WARNING) << "browseros: Could not find available port after "
 +               << kMaxPortAttempts
 +               << " attempts, using " << starting_port << " anyway";

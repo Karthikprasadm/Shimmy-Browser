@@ -69,11 +69,14 @@ def write_patches(
         # Handle different operations
         if patch.operation == FileOperation.DELETE:
             # Create deletion marker
-            if create_deletion_marker(ctx, file_path):
+            result = create_deletion_marker(ctx, file_path)
+            if result is True:
                 success_count += 1
                 extracted_files.append(file_path)
-            else:
+            elif result is False:
                 fail_count += 1
+            else:  # None = user skipped
+                skip_count += 1
 
         elif patch.is_binary:
             if include_binary:

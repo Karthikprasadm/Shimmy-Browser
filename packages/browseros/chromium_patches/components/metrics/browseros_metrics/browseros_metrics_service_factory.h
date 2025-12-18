@@ -1,15 +1,15 @@
-diff --git a/chrome/browser/browseros/metrics/browseros_metrics_service_factory.h b/chrome/browser/browseros/metrics/browseros_metrics_service_factory.h
+diff --git a/components/metrics/browseros_metrics/browseros_metrics_service_factory.h b/components/metrics/browseros_metrics/browseros_metrics_service_factory.h
 new file mode 100644
-index 0000000000000..2caddc7598a43
+index 0000000000000..014eb17aba442
 --- /dev/null
-+++ b/chrome/browser/browseros/metrics/browseros_metrics_service_factory.h
++++ b/components/metrics/browseros_metrics/browseros_metrics_service_factory.h
 @@ -0,0 +1,48 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
-+#ifndef CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
-+#define CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
++#ifndef COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
++#define COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
 +
 +#include "base/no_destructor.h"
 +#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
@@ -51,4 +51,5 @@ index 0000000000000..2caddc7598a43
 +
 +}  // namespace browseros_metrics
 +
-+#endif  // CHROME_BROWSER_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
++#endif  // COMPONENTS_METRICS_BROWSEROS_METRICS_BROWSEROS_METRICS_SERVICE_FACTORY_H_
+\ No newline at end of file

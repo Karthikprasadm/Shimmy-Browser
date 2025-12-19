@@ -27,6 +27,7 @@ from ..common.utils import (
     log_error,
     log_info,
     log_success,
+    log_warning,
     IS_MACOS,
     IS_WINDOWS,
     IS_LINUX,
@@ -119,12 +120,12 @@ EXECUTION_ORDER = [
             "resources",
             "chromium_replace",
             "string_replaces",
-            "series_patches",
             "patches",
+            "configure",
         ],
     ),
-    # Phase 3: Configure & Build
-    ("build", ["configure", "compile"]),
+    # Phase 3: Build
+    ("build", ["compile"]),
     # Phase 4: Code Signing (platform-aware)
     ("sign", [_get_sign_module()]),
     # Phase 5: Packaging (platform-aware)
@@ -263,12 +264,12 @@ def main(
     prep: bool = typer.Option(
         False,
         "--prep",
-        help="Run prep phase (patches, chromium_replace, string_replaces, resources)",
+        help="Run prep phase (resources, chromium_replace, string_replaces, patches, configure)",
     ),
     build: bool = typer.Option(
         False,
         "--build",
-        help="Run build phase (configure, compile)",
+        help="Run build phase (compile)",
     ),
     sign: bool = typer.Option(
         False,
@@ -423,6 +424,7 @@ def main(
             phase_names.append("setup")
         if prep:
             phase_names.append("prep")
+            log_warning("⚠️  --prep does NOT apply series_patches. Run 'browseros build -m series_patches' separately if needed.")
         if build:
             phase_names.append("build")
         if sign:

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000..114189758b373
+index 0000000000000..dab79743c4753
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1038 @@
+@@ -0,0 +1,1190 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -33,9 +33,11 @@ index 0000000000000..114189758b373
 +#include <signal.h>
 +#endif
 +
++#include "chrome/browser/browseros/core/browseros_switches.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service.h"
 +#include "chrome/browser/browseros/metrics/browseros_metrics_service_factory.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/server/browseros_server_updater.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
@@ -46,10 +48,14 @@ index 0000000000000..114189758b373
 +#include "content/public/browser/devtools_agent_host.h"
 +#include "content/public/browser/devtools_socket_factory.h"
 +#include "content/public/browser/storage_partition.h"
++#include "net/base/address_family.h"
++#include "net/base/ip_address.h"
++#include "net/base/ip_endpoint.h"
 +#include "net/base/net_errors.h"
 +#include "net/base/port_util.h"
 +#include "net/log/net_log_source.h"
 +#include "net/socket/tcp_server_socket.h"
++#include "net/socket/tcp_socket.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"
 +#include "services/network/public/cpp/resource_request.h"
 +#include "services/network/public/cpp/simple_url_loader.h"
@@ -65,6 +71,10 @@ index 0000000000000..114189758b373
 +constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(30);
 +constexpr base::TimeDelta kHealthCheckTimeout = base::Seconds(15);
 +constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(10);
++
++// Crash tracking: if server crashes within grace period, count as startup failure
++constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
++constexpr int kMaxStartupFailures = 3;
 +
 +constexpr int kMaxPortAttempts = 100;
 +constexpr int kMaxPort = 65535;
@@ -172,47 +182,62 @@ index 0000000000000..114189758b373
 +// Launches the BrowserOS server process on a background thread.
 +// This function performs blocking I/O operations (PathExists, WriteConfigToml,
 +// LaunchProcess).
-+base::Process LaunchProcessOnBackgroundThread(
++// If the primary exe_path doesn't exist, falls back to fallback_exe_path.
++browseros::BrowserOSServerManager::LaunchResult LaunchProcessOnBackgroundThread(
 +    const base::FilePath& exe_path,
 +    const base::FilePath& resources_dir,
++    const base::FilePath& fallback_exe_path,
++    const base::FilePath& fallback_resources_dir,
 +    const base::FilePath& execution_dir,
 +    uint16_t cdp_port,
 +    uint16_t mcp_port,
 +    uint16_t agent_port,
 +    uint16_t extension_port,
 +    const ServerConfig& server_config) {
-+  // Check if executable exists (blocking I/O)
-+  if (!base::PathExists(exe_path)) {
-+    LOG(ERROR) << "browseros: BrowserOS server executable not found at: "
-+               << exe_path;
-+    return base::Process();
++  browseros::BrowserOSServerManager::LaunchResult result;
++  base::FilePath actual_exe_path = exe_path;
++  base::FilePath actual_resources_dir = resources_dir;
++
++  // Check if executable exists, fallback to bundled if not
++  if (!base::PathExists(actual_exe_path)) {
++    LOG(WARNING) << "browseros: Binary not found at " << actual_exe_path
++                 << ", falling back to bundled";
++    actual_exe_path = fallback_exe_path;
++    actual_resources_dir = fallback_resources_dir;
++    result.used_fallback = true;
++
++    if (!base::PathExists(actual_exe_path)) {
++      LOG(ERROR) << "browseros: Bundled binary also not found at: "
++                 << actual_exe_path;
++      return result;
++    }
 +  }
 +
 +  if (execution_dir.empty()) {
 +    LOG(ERROR) << "browseros: Execution directory path is empty";
-+    return base::Process();
++    return result;
 +  }
 +
 +  // Ensure execution directory exists (blocking I/O)
 +  if (!base::CreateDirectory(execution_dir)) {
 +    LOG(ERROR) << "browseros: Failed to create execution directory at: "
 +               << execution_dir;
-+    return base::Process();
++    return result;
 +  }
 +
 +  // Write configuration to JSON file
 +  base::FilePath config_path = WriteConfigJson(
-+      execution_dir, resources_dir, cdp_port, mcp_port, agent_port,
++      execution_dir, actual_resources_dir, cdp_port, mcp_port, agent_port,
 +      extension_port, server_config);
 +  if (config_path.empty()) {
 +    LOG(ERROR) << "browseros: Failed to write config file, aborting launch";
-+    return base::Process();
++    return result;
 +  }
 +
 +  // Build command line with --config flag and explicit port args
 +  // Ports are passed via CLI to avoid config file read race conditions
 +  // CLI takes precedence over config file in the server's merge logic
-+  base::CommandLine cmd(exe_path);
++  base::CommandLine cmd(actual_exe_path);
 +  cmd.AppendSwitchPath("config", config_path);
 +  cmd.AppendSwitchASCII("cdp-port", base::NumberToString(cdp_port));
 +  cmd.AppendSwitchASCII("http-mcp-port", base::NumberToString(mcp_port));
@@ -226,7 +251,8 @@ index 0000000000000..114189758b373
 +#endif
 +
 +  // Launch the process (blocking I/O)
-+  return base::LaunchProcess(cmd, options);
++  result.process = base::LaunchProcess(cmd, options);
++  return result;
 +}
 +
 +// Factory for creating TCP server sockets for CDP
@@ -382,25 +408,25 @@ index 0000000000000..114189758b373
 +
 +  // Apply command-line overrides (internal testing only)
 +  int cdp_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-cdp-port", "CDP port");
++      command_line, browseros::kCDPPort, "CDP port");
 +  if (cdp_override > 0) {
 +    cdp_port_ = cdp_override;
 +  }
 +
 +  int mcp_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-mcp-port", "MCP port");
++      command_line, browseros::kMCPPort, "MCP port");
 +  if (mcp_override > 0) {
 +    mcp_port_ = mcp_override;
 +  }
 +
 +  int agent_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-agent-port", "Agent port");
++      command_line, browseros::kAgentPort, "Agent port");
 +  if (agent_override > 0) {
 +    agent_port_ = agent_override;
 +  }
 +
 +  int extension_override = GetPortOverrideFromCommandLine(
-+      command_line, "browseros-extension-port", "Extension port");
++      command_line, browseros::kExtensionPort, "Extension port");
 +  if (extension_override > 0) {
 +    extension_port_ = extension_override;
 +  }
@@ -439,7 +465,7 @@ index 0000000000000..114189758b373
 +  InitializePortsAndPrefs();
 +  SavePortsToPrefs();
 +
-+  if (command_line->HasSwitch("disable-browseros-server")) {
++  if (command_line->HasSwitch(browseros::kDisableServer)) {
 +    LOG(INFO) << "browseros: BrowserOS server disabled via command line";
 +    return;
 +  }
@@ -465,6 +491,12 @@ index 0000000000000..114189758b373
 +  LOG(INFO) << "browseros: Stopping BrowserOS server";
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
++
++  // Stop the updater
++  if (updater_) {
++    updater_->Stop();
++    updater_.reset();
++  }
 +
 +  // Use wait=false for shutdown - just send kill signal, don't block UI thread
 +  TerminateBrowserOSProcess(/*wait=*/false);
@@ -513,8 +545,21 @@ index 0000000000000..114189758b373
 +}
 +
 +void BrowserOSServerManager::LaunchBrowserOSProcess() {
-+  base::FilePath exe_path = GetBrowserOSServerExecutablePath();
-+  base::FilePath resources_dir = GetBrowserOSServerResourcesPath();
++  // Bundled paths (always available as fallback)
++  base::FilePath fallback_exe_path = GetBrowserOSServerExecutablePath();
++  base::FilePath fallback_resources_dir = GetBrowserOSServerResourcesPath();
++
++  // Use updater's best paths if available (for OTA updates), otherwise bundled
++  base::FilePath exe_path;
++  base::FilePath resources_dir;
++  if (updater_) {
++    exe_path = updater_->GetBestServerBinaryPath();
++    resources_dir = updater_->GetBestServerResourcesPath();
++  } else {
++    exe_path = fallback_exe_path;
++    resources_dir = fallback_resources_dir;
++  }
++
 +  base::FilePath execution_dir = GetBrowserOSExecutionDir();
 +  if (execution_dir.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
@@ -557,24 +602,41 @@ index 0000000000000..114189758b373
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
 +      base::BindOnce(&LaunchProcessOnBackgroundThread, exe_path, resources_dir,
-+                     execution_dir, cdp_port, mcp_port, agent_port,
-+                     extension_port, server_config),
++                     fallback_exe_path, fallback_resources_dir, execution_dir,
++                     cdp_port, mcp_port, agent_port, extension_port,
++                     server_config),
 +      base::BindOnce(&BrowserOSServerManager::OnProcessLaunched,
 +                     weak_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSServerManager::OnProcessLaunched(base::Process process) {
-+  if (!process.IsValid()) {
++void BrowserOSServerManager::OnProcessLaunched(LaunchResult result) {
++  bool was_updating = is_updating_;
++
++  // If we fell back to bundled binary, invalidate downloaded version
++  if (result.used_fallback && updater_) {
++    updater_->InvalidateDownloadedVersion();
++  }
++
++  if (!result.process.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch BrowserOS server";
 +    // Don't stop CDP server - it's independent and may be used by other things
 +    // Leave system in degraded state (CDP up, no browseros_server) rather than
 +    // completely broken state (no CDP, no server)
 +    is_restarting_ = false;
++
++    // Notify updater of failure if this was an update restart
++    if (was_updating) {
++      is_updating_ = false;
++      if (update_complete_callback_) {
++        std::move(update_complete_callback_).Run(false);
++      }
++    }
 +    return;
 +  }
 +
-+  process_ = std::move(process);
++  process_ = std::move(result.process);
 +  is_running_ = true;
++  last_launch_time_ = base::TimeTicks::Now();
 +
 +  LOG(INFO) << "browseros: BrowserOS server started with PID: " << process_.Pid();
 +  LOG(INFO) << "browseros: CDP port: " << cdp_port_;
@@ -595,6 +657,26 @@ index 0000000000000..114189758b373
 +    if (prefs && prefs->GetBoolean(browseros_server::kRestartServerRequested)) {
 +      prefs->SetBoolean(browseros_server::kRestartServerRequested, false);
 +      LOG(INFO) << "browseros: Restart completed, reset restart_requested pref";
++    }
++  }
++
++  // Notify updater of success if this was an update restart
++  if (was_updating) {
++    is_updating_ = false;
++    if (update_complete_callback_) {
++      std::move(update_complete_callback_).Run(true);
++    }
++  }
++
++  // Start the updater (if not already running and not disabled)
++  if (!updater_) {
++    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++            browseros::kDisableServerUpdater)) {
++      LOG(INFO) << "browseros: Server updater disabled via command line";
++    } else {
++      updater_ =
++          std::make_unique<browseros_server::BrowserOSServerUpdater>(this);
++      updater_->Start();
 +    }
 +  }
 +}
@@ -644,6 +726,28 @@ index 0000000000000..114189758b373
 +  // Stop timers during restart to prevent races
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
++
++  // Crash tracking: check if this was a startup failure
++  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
++  if (uptime < kStartupGracePeriod) {
++    consecutive_startup_failures_++;
++    LOG(WARNING) << "browseros: Startup failure detected (uptime: "
++                 << uptime.InSeconds() << "s, consecutive failures: "
++                 << consecutive_startup_failures_ << ")";
++
++    if (consecutive_startup_failures_ >= kMaxStartupFailures) {
++      LOG(ERROR) << "browseros: Too many startup failures ("
++                 << consecutive_startup_failures_
++                 << "), invalidating downloaded version";
++      if (updater_) {
++        updater_->InvalidateDownloadedVersion();
++      }
++      consecutive_startup_failures_ = 0;
++    }
++  } else {
++    // Process ran past grace period, reset failure counter
++    consecutive_startup_failures_ = 0;
++  }
 +
 +  // Prevent concurrent restarts (e.g., if RestartBrowserOSProcess is in progress)
 +  if (is_restarting_) {
@@ -844,6 +948,43 @@ index 0000000000000..114189758b373
 +  LaunchBrowserOSProcess();
 +}
 +
++void BrowserOSServerManager::RestartServerForUpdate(
++    UpdateCompleteCallback callback) {
++  LOG(INFO) << "browseros: Restarting server for OTA update";
++
++  // Prevent multiple concurrent restarts
++  if (is_restarting_ || is_updating_) {
++    LOG(WARNING) << "browseros: Restart already in progress, failing update";
++    std::move(callback).Run(false);
++    return;
++  }
++
++  is_updating_ = true;
++  update_complete_callback_ = std::move(callback);
++
++  // Use same restart flow as RestartBrowserOSProcess
++  is_restarting_ = true;
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
++
++  int cdp = cdp_port_;
++  int mcp = mcp_port_;
++  int agent = agent_port_;
++  int extension = extension_port_;
++
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++      base::BindOnce(
++          [](BrowserOSServerManager* manager, int cdp, int mcp, int agent,
++             int extension) -> RevalidatedPorts {
++            manager->TerminateBrowserOSProcess(/*wait=*/true);
++            return manager->RevalidatePorts(cdp, mcp, agent, extension);
++          },
++          base::Unretained(this), cdp, mcp, agent, extension),
++      base::BindOnce(&BrowserOSServerManager::OnPortsRevalidated,
++                     weak_factory_.GetWeakPtr()));
++}
++
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
 +  if (!is_running_) {
 +    return;
@@ -937,22 +1078,33 @@ index 0000000000000..114189758b373
 +    return false;
 +  }
 +
-+  // Try to bind to both IPv4 and IPv6 localhost
-+  // If EITHER is in use, the port is NOT available
-+  std::unique_ptr<net::TCPServerSocket> socket(
-+      new net::TCPServerSocket(nullptr, net::NetLogSource()));
++  // Use TCPSocket directly instead of TCPServerSocket to avoid SO_REUSEADDR.
++  // TCPServerSocket::Listen() calls SetDefaultOptionsForServer() which sets
++  // SO_REUSEADDR, allowing bind to succeed even when another socket is bound
++  // to 0.0.0.0 (especially on macOS). By using TCPSocket directly and NOT
++  // calling SetDefaultOptionsForServer(), we get accurate port availability.
 +
 +  // Try binding to IPv4 localhost
-+  int result = socket->ListenWithAddressAndPort("127.0.0.1", port, 1);
++  auto socket = net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
++  int result = socket->Open(net::ADDRESS_FAMILY_IPV4);
++  if (result != net::OK) {
++    return false;
++  }
++  result = socket->Bind(net::IPEndPoint(net::IPAddress::IPv4Localhost(), port));
++  socket->Close();
 +  if (result != net::OK) {
 +    return false;  // IPv4 port is in use
 +  }
 +
 +  // Try binding to IPv6 localhost
-+  std::unique_ptr<net::TCPServerSocket> socket6(
-+      new net::TCPServerSocket(nullptr, net::NetLogSource()));
-+  int result6 = socket6->ListenWithAddressAndPort("::1", port, 1);
-+  if (result6 != net::OK) {
++  auto socket6 = net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
++  result = socket6->Open(net::ADDRESS_FAMILY_IPV6);
++  if (result != net::OK) {
++    return false;
++  }
++  result = socket6->Bind(net::IPEndPoint(net::IPAddress::IPv6Localhost(), port));
++  socket6->Close();
++  if (result != net::OK) {
 +    return false;  // IPv6 port is in use
 +  }
 +
@@ -962,9 +1114,9 @@ index 0000000000000..114189758b373
 +base::FilePath BrowserOSServerManager::GetBrowserOSServerResourcesPath() const {
 +  // Check for command-line override first
 +  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-+  if (command_line->HasSwitch("browseros-server-resources-dir")) {
++  if (command_line->HasSwitch(browseros::kServerResourcesDir)) {
 +    base::FilePath custom_path =
-+        command_line->GetSwitchValuePath("browseros-server-resources-dir");
++        command_line->GetSwitchValuePath(browseros::kServerResourcesDir);
 +    LOG(INFO) << "browseros: Using custom resources dir from command line: "
 +              << custom_path;
 +    return custom_path;

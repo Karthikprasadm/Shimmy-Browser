@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..320f4502fdce2
+index 0000000000000..3c322437eada1
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,182 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -23,6 +23,10 @@ index 0000000000000..320f4502fdce2
 +#include "base/timer/timer.h"
 +
 +class PrefChangeRegistrar;
++
++namespace browseros_server {
++class BrowserOSServerUpdater;
++}
 +
 +namespace net {
 +class HttpResponseHeaders;
@@ -78,6 +82,23 @@ index 0000000000000..320f4502fdce2
 +  // Called when browser is shutting down
 +  void Shutdown();
 +
++  // Path getters (used by updater)
++  base::FilePath GetBrowserOSServerExecutablePath() const;
++  base::FilePath GetBrowserOSServerResourcesPath() const;
++
++  // Restarts the server for an OTA update. Stops current process,
++  // then starts new process with updated binary path from updater.
++  // Callback is invoked with success/failure status.
++  using UpdateCompleteCallback = base::OnceCallback<void(bool success)>;
++  void RestartServerForUpdate(UpdateCompleteCallback callback);
++
++  // Result from launching the server process on background thread
++  // Public because it's used by free function LaunchProcessOnBackgroundThread
++  struct LaunchResult {
++    base::Process process;
++    bool used_fallback = false;  // True if fell back to bundled binary
++  };
++
 + private:
 +  friend base::NoDestructor<BrowserOSServerManager>;
 +
@@ -97,7 +118,7 @@ index 0000000000000..320f4502fdce2
 +  void StartCDPServer();
 +  void StopCDPServer();
 +  void LaunchBrowserOSProcess();
-+  void OnProcessLaunched(base::Process process);
++  void OnProcessLaunched(LaunchResult result);
 +  // Terminates the BrowserOS server process.
 +  // If wait=true, blocks until process exits (must be called from background thread).
 +  // If wait=false, just sends kill signal and returns (safe from any thread).
@@ -125,9 +146,7 @@ index 0000000000000..320f4502fdce2
 +  void OnRestartServerRequestedChanged();
 +  void CheckProcessStatus();
 +
-+  base::FilePath GetBrowserOSServerResourcesPath() const;
 +  base::FilePath GetBrowserOSExecutionDir() const;
-+  base::FilePath GetBrowserOSServerExecutablePath() const;
 +  // Finds an available port starting from starting_port, excluding ports
 +  // already assigned to other services to prevent collisions.
 +  int FindAvailablePort(int starting_port, const std::set<int>& excluded_ports);
@@ -142,6 +161,12 @@ index 0000000000000..320f4502fdce2
 +  bool allow_remote_in_mcp_ = false;  // Whether remote connections allowed in MCP
 +  bool is_running_ = false;
 +  bool is_restarting_ = false;  // Whether server is currently restarting
++  bool is_updating_ = false;    // Whether restarting for OTA update
++  UpdateCompleteCallback update_complete_callback_;
++
++  // Crash tracking for automatic rollback
++  int consecutive_startup_failures_ = 0;
++  base::TimeTicks last_launch_time_;
 +
 +  // Timer for health checks
 +  base::RepeatingTimer health_check_timer_;
@@ -151,6 +176,9 @@ index 0000000000000..320f4502fdce2
 +
 +  // Preference change registrar for monitoring pref changes
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
++
++  // Server updater for OTA updates
++  std::unique_ptr<browseros_server::BrowserOSServerUpdater> updater_;
 +
 +  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
 +};

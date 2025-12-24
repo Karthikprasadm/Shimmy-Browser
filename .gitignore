@@ -14,6 +14,10 @@
 **/.pytest_cache/
 **/dist/
 **/releases/
+**/.wrangler/
+**/node_modules/
+
+
 
 nxtscape-cli-access.json
 gclient.json

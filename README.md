@@ -49,7 +49,7 @@
 - 🔒 Privacy first - bring your own keys or use local models with Ollama. Your browsing history stays on your computer
 - 🚀 Open source and community driven - see exactly what's happening under the hood
 - 🤝 BrowserOS as MCP server - you can install our MCP server and use the browser from within `claude-code` or `gemini-cli`.
-- 🛡️ (coming soon) Built-in AI ad blocker that works across more scenarios!  
+- 🛡️ Built-in AI ad blocker that works across more scenarios!  
 
 ## Demos
 

@@ -2,3 +2,6 @@
 	path = packages/browseros-agent
 	url = https://github.com/browseros-ai/BrowserOS-agent.git
 	branch = main
+[submodule "Sup-agent"]
+	path = Sup-agent
+	url = https://github.com/Karthikprasadm/Sup-agent.git

@@ -32,16 +32,75 @@
 ## Quick start
 
 1. Download and install BrowserOS:
-   - [macOS](https://files.browseros.com/download/BrowserOS.dmg)
-   - [Windows](https://files.browseros.com/download/BrowserOS_installer.exe)
-   - [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage)
-   - [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb)
+   - macOS: Coming soon
+   - Windows: Coming soon
+   - Linux: Coming soon
 
 2. Import your Chrome data (optional)
 
 3. Connect your AI provider (OpenAI, Anthropic, or local models via Ollama/LMStudio)
+   - **Important**: Use a model that supports tool use (see AI Model Requirements above)
+   - Configure in extension Options → AI Settings
 
 4. Start automating!
+   - Click the extension icon or press **Alt+A** to open the AI agent
+   - Use keyboard shortcuts for quick access (Alt+A/K to toggle, Alt+L to cycle providers)
+
+## ⚠️ Important: AI Model Requirements
+
+**The BrowserOS AI agent requires models that support tool use (function calling).** Not all AI models support this feature.
+
+### ✅ Supported Models
+- **OpenAI**: GPT-4, GPT-4 Turbo, GPT-3.5 Turbo (all support tool use)
+- **Anthropic**: Claude 3 (all variants support tool use)
+- **Google**: Gemini 1.5 Flash, Gemini 1.5 Pro, Gemini 2.0 (all support tool use)
+- **OpenRouter**: Models with "tools" in their Supported Parameters
+- **Local Models**: Ollama/LM Studio models that support function calling
+
+### How to Filter for Tool Use on OpenRouter
+
+1. Go to [OpenRouter Models](https://openrouter.ai/models)
+2. Look for the **"Supported Parameters"** filter section
+3. Check the **"tools"** checkbox (you'll see a checkmark when selected)
+4. The models list will update to show only models that support tool use
+5. Select a model from the filtered list and use its model ID in the extension configuration
+
+### ❌ Not Supported
+- Models without tool use/function calling capabilities
+- Text-only models that cannot execute browser automation tools
+
+**How to check:** When using OpenRouter or other providers, ensure the model lists "tools" or "function calling" in its supported features. Models without this capability will show errors like "No endpoints found that support tool use."
+
+**📋 Verified Models:** See [validated_agents.md](validated_agents.md) for a list of tested and verified models that work well with BrowserOS.
+
+## 🎯 Keyboard Shortcuts
+
+The BrowserOS agent includes convenient keyboard shortcuts for quick access:
+
+- **Alt+A** or **Alt+K**: Toggle the AI agent side panel
+- **Alt+L**: Cycle between configured LLM providers
+
+These shortcuts work from any tab and provide instant access to the AI agent without clicking the extension icon.
+
+## 🔧 Recent Fixes & Improvements
+
+### Extension & UI
+- ✅ Fixed side panel opening issues (user gesture requirement)
+- ✅ Added keyboard shortcuts for quick access (Alt+A/K/L)
+- ✅ Improved fallback compatibility for regular Chrome
+- ✅ Fixed CSP issues with SVG imports
+- ✅ Fixed accessibility warnings (aria-labelledby)
+
+### Model Configuration
+- ✅ Added validation for tool use support
+- ✅ Created `validated_agents.md` with tested models
+- ✅ Improved error messages for incompatible models
+- ✅ Added OpenRouter filtering instructions
+
+### Developer Experience
+- ✅ Improved WebSocket error handling and logging
+- ✅ Enhanced troubleshooting documentation
+- ✅ Updated build and setup instructions
 
 ## What makes BrowserOS special
 - 🏠 Feels like home - same familiar interface as Google Chrome, works with all your extensions
@@ -57,7 +116,7 @@
 [![BrowserOS agent in action](docs/videos/browserOS-agent-in-action.gif)](https://www.youtube.com/watch?v=SoSFev5R5dI)
 <br/><br/>
 
-### 🎇 Install [BrowserOS as MCP](https://docs.browseros.com/browseros-mcp/how-to-guide) and control it from `claude-code`
+### 🎇 Install BrowserOS as MCP and control it from `claude-code`
 
 https://github.com/user-attachments/assets/c725d6df-1a0d-40eb-a125-ea009bf664dc
 
@@ -119,10 +178,10 @@ Your browsing data could be used for ads or to train their models. We keep your 
 
 We'd love your help making BrowserOS better!
 
-- 🐛 [Report bugs](https://github.com/nxtscape/nxtscape/issues)
-- 💡 [Suggest features](https://github.com/browseros-ai/BrowserOS/issues/99)
-- 💬 [Join Discord](https://discord.gg/YKwjt5vuKr)
-- 🐦 [Follow on Twitter](https://x.com/browserOS_ai)
+- 🐛 Report bugs (create issues in this repo)
+- 💡 Suggest features (create issues in this repo)
+- 💬 Join our community
+- 🐦 Follow us on social media
 
 ## License
 

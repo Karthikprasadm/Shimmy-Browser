@@ -1,0 +1,106 @@
+HOW TO RUN BROWSEROS BROWSER + BROWSEROS AGENT
+=====================================
+
+AGENT SERVER
+------------
+✅ Default ports (configurable in .env.development):
+   - Server HTTP: 9105
+   - CDP: 9005
+   - WebSocket: 9305
+   - Health check: http://localhost:9105/health
+
+To start server:
+  cd D:\Shimmy-Browser\Sup-agent
+  bun run start:server
+
+To restart server:
+  Stop the current process (Ctrl+C) and run start:server again
+
+LOAD EXTENSIONS IN BROWSER
+---------------------------
+You can test the agent in Chrome, Edge, or any Chromium browser:
+
+1. Open Chrome/Edge
+2. Go to chrome://extensions/
+3. Enable "Developer mode" (toggle top right)
+4. Click "Load unpacked"
+
+Load these TWO extensions:
+
+Extension 1 - Agent UI:
+  Path: D:\Shimmy-Browser\Sup-agent\apps\agent\dist\chrome-mv3
+
+Extension 2 - Controller:
+  Path: D:\Shimmy-Browser\Sup-agent\apps\controller-ext\dist
+
+5. After loading, open the side panel:
+   - Click the "Ask BrowserOS" icon in the toolbar, OR
+   - Press Alt+A or Alt+K (keyboard shortcuts)
+
+6. The side panel should open with the chat interface
+
+KEYBOARD SHORTCUTS
+------------------
+- Alt+A or Alt+K: Toggle AI agent side panel
+- Alt+L: Cycle between configured LLM providers
+
+To view/edit shortcuts:
+  Go to chrome://extensions/shortcuts
+
+BROWSER (BrowserOS)
+-------------------
+⚠️ To run the actual BrowserOS browser, you need:
+  - Chromium source code (~100GB download)
+  - Build it using the build system
+  
+For now, you can test the agent in regular Chrome/Edge.
+
+TESTING
+-------
+1. Make sure server is running (port 9105)
+   - Check: curl http://localhost:9105/health
+   - Should return: {"healthy":true}
+
+2. Load both extensions (Agent UI + Controller)
+
+3. Open side panel:
+   - Click extension icon, OR
+   - Press Alt+A or Alt+K
+
+4. Configure AI provider:
+   - Click extension icon → Options
+   - Go to AI Settings
+   - Add a provider with a model that supports tool use
+   - See validated_agents.md for tested models
+
+5. Try chatting with the AI agent
+   - Ask questions or request browser automation tasks
+   - Test tool use capabilities
+
+TROUBLESHOOTING
+---------------
+Server Issues:
+- Server not running? Check: curl http://localhost:9105/health
+- Port conflicts? Check .env.development and change ports if needed
+- WebSocket errors? Verify server is running and ports match config
+
+Extension Issues:
+- Extension not loading? Check browser console (F12) for errors
+- Side panel not opening? Reload both extensions
+- Keyboard shortcuts not working? Check chrome://extensions/shortcuts
+- Connection errors? Verify server is on port 9105 (or configured port)
+
+Model Issues:
+- "No endpoints found that support tool use"?
+  → Model doesn't support function calling
+  → Use a model from validated_agents.md
+  → Filter OpenRouter models by "tools" parameter
+
+- Rate limiting errors?
+  → Free models may have rate limits
+  → Wait a few minutes or try a different model
+
+- API key errors?
+  → Verify API key is correct and has credits
+  → Check key is active in provider dashboard
+

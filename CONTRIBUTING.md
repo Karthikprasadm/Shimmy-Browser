@@ -23,11 +23,11 @@ Most folks start with the agent since it's way easier to set up and iterate on.
 - Testing & docs
 
 **What you need:**
-- Node.js 18+
+- Bun 1.3.5+ (not Node.js)
 - ~500MB disk space
 - 10 minutes to set up
 
-**Skills:** TypeScript, React, Chrome APIs
+**Skills:** TypeScript, React, Chrome APIs, Bun runtime
 
 **[→ Agent Setup](#agent-development)**
 
@@ -63,28 +63,50 @@ The agent is a Chrome extension that provides AI-powered automation. Most contri
 
 ```bash
 # 1. Navigate to agent directory
-cd packages/browseros-agent
+cd Sup-agent
 
 # 2. Install dependencies
-yarn install
+bun install
 
-# 3. Set up environment
-cp .env.example .env
-# Edit .env and add your LITELLM_API_KEY
+# 3. Set up environment (if needed)
+# The .env.development file should already exist
+# Edit it to configure ports or add API keys
 
-# 4. Build the extension
-yarn build:dev       # One-time build
+# 4. Build the extensions
+bun run build:agent    # Build agent UI extension
+bun run build:ext      # Build controller extension
+
+# 5. Start the server
+bun run start:server
 ```
 
-### Load in BrowserOS 
+### Load in Browser/Chrome
 
 1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select `packages/browseros-agent/dist/`
-5. Press Agent icon from extensions toolbar to open the agent panel
+4. Load **TWO extensions**:
+   - Agent UI: `Sup-agent/apps/agent/dist/chrome-mv3`
+   - Controller: `Sup-agent/apps/controller-ext/dist`
+5. Open the agent panel:
+   - Click the "Ask BrowserOS" icon, OR
+   - Press **Alt+A** or **Alt+K** (keyboard shortcuts)
 
-**For detailed setup, architecture, and code standards, see [Agent Contributing Guide](packages/browseros-agent/CONTRIBUTING.md).**
+### Development Workflow
+
+```bash
+# Start server in one terminal
+bun run start:server
+
+# In another terminal, build extensions (watch mode available)
+bun run build:agent    # One-time build
+bun run build:ext      # One-time build
+
+# Or use dev mode (if available)
+bun run start:agent    # Dev mode with hot reload
+```
+
+**For detailed setup, architecture, and code standards, see [Agent README](Sup-agent/README.md).**
 
 ## Browser Development
 
@@ -206,22 +228,39 @@ export type ToolInput = z.infer<typeof ToolInputSchema>
 ```
 monorepo/
 ├── packages/
-│   ├── browseros/              # Chromium build system
-│   │   ├── build/             # Python build scripts
-│   │   ├── chromium_patches/  # Patches to Chromium source
-│   │   └── resources/         # Icons, configs
-│   │
-│   └── browseros-agent/        # Chrome extension
-│       ├── src/
-│       │   ├── lib/           # Core agent logic
-│       │   ├── sidepanel/     # Side panel UI
-│       │   ├── newtab/        # New tab page
-│       │   └── background/    # Extension background
-│       └── docs/              # Architecture docs
+│   └── browseros/              # Chromium build system
+│       ├── build/             # Python build scripts
+│       ├── chromium_patches/  # Patches to Chromium source
+│       └── resources/         # Icons, configs
+│
+├── Sup-agent/                  # AI Agent (Git submodule)
+│   ├── apps/
+│   │   ├── server/            # Bun server (MCP + agent loop)
+│   │   ├── agent/             # Agent UI (Chrome extension)
+│   │   └── controller-ext/    # Controller extension
+│   └── packages/
+│       └── shared/            # Shared constants
 │
 ├── docs/                       # General documentation
 └── CONTRIBUTING.md            # This file
 ```
+
+## Recent Fixes & Improvements
+
+### Side Panel & Keyboard Shortcuts
+- ✅ Fixed side panel opening issues (user gesture requirement)
+- ✅ Added keyboard shortcuts: Alt+A/K (toggle), Alt+L (cycle providers)
+- ✅ Improved fallback for regular Chrome (BrowserOS-specific APIs gracefully degrade)
+
+### Extension Loading
+- ✅ Fixed CSP issues with SVG imports (using `?url` suffix)
+- ✅ Fixed accessibility warnings (aria-labelledby)
+- ✅ Improved WebSocket error handling
+
+### Model Configuration
+- ✅ Added validation for tool use support
+- ✅ Created validated_agents.md with tested models
+- ✅ Improved error messages for incompatible models
 
 ## Ways to Contribute
 
@@ -235,6 +274,7 @@ Found a bug? [Open an issue](https://github.com/browseros-ai/BrowserOS/issues/ne
 - Expected vs actual behavior
 - Screenshots/videos
 - Environment details (OS, browser version, BrowserOS version)
+- Console errors (F12 → Console tab)
 
 ### 💡 Suggest Features
 

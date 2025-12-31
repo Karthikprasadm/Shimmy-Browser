@@ -317,6 +317,7 @@ bun run build:ext      # Build controller extension
 # 8. Test the agent
 # - Click extension icon or press Alt+A to open side panel
 # - Configure AI provider in Options → AI Settings
+# - Try keyboard shortcuts: Alt+A/K (toggle), Alt+L (cycle providers)
 # - Start chatting!
 ```
 
@@ -419,6 +420,43 @@ Make sure these ports are available or configure different ports in `.env.develo
 - Verify your API key is correct
 - Check key has sufficient credits/quota
 - For OpenRouter, ensure key is valid and active
+
+**"[404] No endpoints found that support image input":**
+- The model doesn't support vision/image inputs
+- Use a model that supports vision (e.g., Gemini models)
+- Check [validated_agents.md](validated_agents.md) for vision-capable models
+- Filter OpenRouter models by "vision" or "image" parameter
+
+### Browser Action Issues
+
+**Actions fail in regular Chrome:**
+- All actions now have fallback implementations for regular Chrome
+- The controller extension automatically uses fallbacks when BrowserOS APIs aren't available
+- No special configuration needed - works out of the box
+
+**"No focusable element found" (typeAtCoordinates):**
+- Ensure coordinates point to an actual input field
+- Try using `browser_type_text` with nodeId instead (requires `getInteractiveSnapshot` first)
+- Verify element is visible and not disabled
+
+**"Content Security Policy (CSP) blocks JavaScript execution":**
+- Some pages have strict CSP that blocks `eval()` and `Function()` constructor
+- This is a browser security feature and cannot be bypassed
+- Error message will clearly indicate CSP violation
+- Try executing JavaScript on a different page without strict CSP
+
+**Actions fail on protected pages (chrome://, extension://):**
+- Protected pages automatically return safe defaults instead of errors
+- `getPageLoadStatus` returns tab status
+- `getSnapshot` returns empty snapshot
+- `executeJavaScript` returns clear error message
+- This is expected behavior due to browser security restrictions
+
+**Element not found errors:**
+- Always call `getInteractiveSnapshot` first to populate element cache
+- NodeIds are only valid for the current page state
+- Refresh snapshot if page content changes dynamically
+- Ensure element is visible and not hidden by CSS
 
 ---
 

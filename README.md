@@ -91,16 +91,33 @@ These shortcuts work from any tab and provide instant access to the AI agent wit
 - ✅ Fixed CSP issues with SVG imports
 - ✅ Fixed accessibility warnings (aria-labelledby)
 
+### Browser Automation Actions (Regular Chrome Support)
+- ✅ **Screenshot**: Works in regular Chrome via `chrome.tabs.captureVisibleTab()`
+- ✅ **Interactive Elements**: Fallback using content scripts for DOM querying
+- ✅ **Page Content**: Fallback for text and links extraction
+- ✅ **Page Load Status**: Fallback using tab status and `document.readyState`
+- ✅ **Click Element**: Fallback using content scripts and element matching
+- ✅ **Type Text**: Fallback for input/textarea/contenteditable elements
+- ✅ **Clear Input**: Fallback for clearing input fields
+- ✅ **Scroll**: Fallback using keyboard events and `window.scrollBy()`
+- ✅ **Click Coordinates**: Fallback using MouseEvent simulation
+- ✅ **Type at Coordinates**: Fallback with element finding and typing
+- ✅ **Execute JavaScript**: Fallback with CSP-aware execution (limited by page CSP)
+- ✅ **Protected URL Detection**: Automatic detection of `chrome://`, `extension://`, etc.
+
 ### Model Configuration
 - ✅ Added validation for tool use support
 - ✅ Created `validated_agents.md` with tested models
 - ✅ Improved error messages for incompatible models
 - ✅ Added OpenRouter filtering instructions
+- ⚠️ **Vision Support**: Some models require vision/image input support for screenshots (see `validated_agents.md`)
 
 ### Developer Experience
 - ✅ Improved WebSocket error handling and logging
 - ✅ Enhanced troubleshooting documentation
 - ✅ Updated build and setup instructions
+- ✅ Added comprehensive fallback implementations for all browser actions
+- ✅ Protected page handling (returns safe defaults instead of errors)
 
 ## What makes BrowserOS special
 - 🏠 Feels like home - same familiar interface as Google Chrome, works with all your extensions

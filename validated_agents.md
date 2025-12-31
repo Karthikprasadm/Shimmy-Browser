@@ -8,13 +8,21 @@ This document lists AI models that have been tested and verified to work well wi
 - `"No endpoints found that support tool use"`
 - `"[404] No endpoints found that support tool use"`
 
+**For screenshot/image features**, models must also support **vision/image input**. Models without vision support will show:
+- `"[404] No endpoints found that support image input"`
+
+**Recommended**: Use models that support both **tools** and **vision** for full functionality.
+
 ## ✅ Verified Models
 
 ### Free Models (OpenRouter)
 
 | Model ID | Provider | Status | Notes | Verified Date |
 |----------|----------|--------|-------|--------------|
-| `xiaomi/mimo-v2-flash:free` | OpenRouter | ✅ Working | Free model, supports tool use, works super well | 2025-01-30 |
+| `xiaomi/mimo-v2-flash:free` | OpenRouter | ✅ Working | Free model, supports tool use, works super well. ⚠️ Does NOT support vision/image input | 2025-01-30 |
+| `google/gemini-1.5-flash:free` | OpenRouter | ✅ Expected | Free model, supports tool use AND vision. Recommended for full functionality | - |
+| `google/gemini-1.5-pro:free` | OpenRouter | ✅ Expected | Free model, supports tool use AND vision. Recommended for full functionality | - |
+| `google/gemini-2.0-flash-exp:free` | OpenRouter | ✅ Expected | Free model, supports tool use AND vision. Recommended for full functionality | - |
 
 ### Premium Models (OpenRouter)
 
@@ -58,21 +66,37 @@ This document lists AI models that have been tested and verified to work well wi
    - For OpenRouter: Filter by "tools" in Supported Parameters
    - For direct providers: Check provider documentation for "function calling" or "tool use" support
 
-2. **Test in BrowserOS:**
+2. **Check Vision Support (for screenshot features):**
+   - For OpenRouter: Filter by "vision" or "image" in Supported Parameters
+   - For direct providers: Check if model supports "vision" or "multimodal" inputs
+   - Models without vision support will fail when agent tries to send screenshots
+
+3. **Test in BrowserOS:**
    - Configure the model in extension Options → AI Settings
    - Try a simple task that requires tool use (e.g., "list my open tabs")
-   - If it works without errors, the model is compatible
+   - Try a task that uses screenshots (e.g., "take a screenshot of this page")
+   - If both work without errors, the model is fully compatible
 
-3. **Add to This List:**
+4. **Add to This List:**
    - Once verified, add the model to this document
-   - Include model ID, provider, status, notes, and verification date
+   - Include model ID, provider, status, notes (including vision support), and verification date
 
 ## 📝 Model Status Legend
 
 - ✅ **Working** - Tested and confirmed working with BrowserOS
 - ✅ **Expected** - Should work based on provider documentation (tool use support confirmed)
-- ⚠️ **Partial** - Works but has limitations
+- ⚠️ **Partial** - Works but has limitations (e.g., tool use but no vision support)
 - ❌ **Not Working** - Does not work (will be listed separately if needed)
+
+## 🎯 Model Recommendations
+
+**For Full Functionality (Tool Use + Vision):**
+- Use Gemini models (via OpenRouter or direct): `google/gemini-1.5-flash:free`, `google/gemini-1.5-pro:free`, `google/gemini-2.0-flash-exp:free`
+- These support both tool use and vision, enabling screenshot-based automation
+
+**For Text-Only Automation (Tool Use Only):**
+- `xiaomi/mimo-v2-flash:free` works well but cannot process screenshots
+- Use when you don't need visual page analysis
 
 ## 🆕 Adding New Models
 

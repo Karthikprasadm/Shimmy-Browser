@@ -264,11 +264,19 @@ If you want auto-updates:
 5. Look for models with "(free)" in the name if you want free options
 6. Copy the model ID (e.g., `google/gemini-1.5-flash`) and use it in the extension configuration
 
+### Vision/Image Input Support
+
+**For screenshot features**, models must also support **vision/image input**:
+- Models without vision support will show: `"[404] No endpoints found that support image input"`
+- Recommended: Use Gemini models which support both tools and vision
+- Filter OpenRouter by both "tools" AND "vision" parameters
+
 ### Configuration
 Users must configure a compatible model in the extension's AI Settings:
 - Options → AI Settings → Add Provider
-- Select a model that supports tool use
+- Select a model that supports tool use (and vision for full functionality)
 - Models without tool use will show: "No endpoints found that support tool use"
+- Models without vision will show: "No endpoints found that support image input" when using screenshots
 
 **📋 Verified Models:** See [validated_agents.md](validated_agents.md) for a list of tested and verified models that work well with BrowserOS.
 
@@ -376,6 +384,29 @@ Before launching publicly:
 3. **Try a different model:**
    - Switch to a verified model from the validated list
    - Free models may have rate limits - try again later if rate limited
+
+### Browser Action Failures
+
+**Issue**: Actions like "click element", "type text", "get screenshot" fail in regular Chrome.
+
+**Solutions**:
+1. **All actions now have fallbacks:**
+   - The controller extension automatically uses fallback implementations in regular Chrome
+   - No BrowserOS-specific APIs required for most actions
+
+2. **Protected pages:**
+   - Actions on `chrome://`, `chrome-extension://`, or Chrome Web Store pages may return safe defaults
+   - This is expected behavior due to browser security restrictions
+
+3. **CSP (Content Security Policy) restrictions:**
+   - `executeJavaScript` may fail on pages with strict CSP
+   - Error message will clearly indicate CSP violation
+   - This is a browser security feature and cannot be bypassed
+
+4. **Element not found errors:**
+   - Ensure you call `getInteractiveSnapshot` first to populate element cache
+   - NodeIds are only valid for the current page state
+   - Refresh snapshot if page content changes
 
 ### WebSocket Connection Errors
 

@@ -89,3 +89,41 @@ Starting Chromium directly with `--app=chrome-extension://...` on the command li
 * **`packages/browseros-agent/scripts/dev/stack.ts`**: The orchestrator script that starts WXT, launches the custom Chromium browser, waits for CDP, and spawns the backend server.
 * **`packages/browseros-agent/apps/app/`**: The frontend Chrome extension.
 * **`packages/browseros-agent/apps/server/`**: The backend MCP endpoints and orchestrator server.
+
+---
+
+## 💡 Troubleshooting & Key Architectural Fixes
+
+If you or a future developer runs into issues, please reference the following solutions for known platform quirks:
+
+### 1. Sidebar Layout Lock / Connection Hang
+* **Symptom:** Opening the browser results in a locked/frozen side-panel UI that never finishes loading.
+* **Cause:** If the browser extension APIs (`chrome.browserOS`) fail to initialize or load slowly, the extension falls back to a developer port (historically set to `9111`). However, the local development backend server listens on port `9105` (`BROWSEROS_SERVER_PORT`). This mismatch caused the WebSocket handshake to hang indefinitely.
+* **Solution:** 
+  1. We exposed `VITE_BROWSEROS_SERVER_PORT` to the client app bundle.
+  2. The developer fallback helper (`helpers.ts`) now prioritizes matching this port (defaulting to `9105`).
+  3. We wrapped key layout containers in React `<Suspense>` boundaries to ensure that even if a connection is slow, the UI gracefully renders loaders instead of freezing.
+
+### 2. New Tab Loop (Auto-Close Quirks)
+* **Symptom:** Opening a new tab (Ctrl+T or clicking `+`) immediately closes the tab automatically.
+* **Cause:** The background worker (`background.js`) tracks and monitors tabs, automatically closing blank/unused agent-spawned tabs to conserve resources. However, Chromium default new tabs (e.g. `chrome://newtab/` or blank pages) were mistakenly flagged as agent-spawned junk.
+* **Solution:** We whitelisted `chrome://newtab/`, `chrome://new-tab-page/`, and `about:blank` in `isLikelyUserInitiatedBlankOrChildTab()` inside `entrypoints/background/index.ts` to ensure user-opened blank pages are never auto-closed.
+
+### 3. Zod API Schema Validation Errors
+* **Symptom:** Sending prompts to the agent results in a `ZodError` response with message `"Invalid input"`.
+* **Cause:** The server merges schemas from different package boundaries (`shared` and `server` packages) using `.merge()`. Due to duplicate installations of `zod` in different `node_modules` folders, the instance validation checks (e.g. `instanceof ZodNever`) failed cross-boundary, causing Zod to reject LLM request parameters (such as `providerType`, `providerName`, and `temperature`) instead of stripping them.
+* **Solution:** Avoid using `schemaA.merge(schemaB)` across package boundary imports. Instead, destructure the shapes locally:
+  ```typescript
+  const LocalMergedSchema = z.object({
+    ...schemaA.shape,
+    ...schemaB.shape
+  })
+  ```
+
+### 4. Agent Spawns New Tab and Fragmented Chat History
+* **Symptom:** Initiating a prompt on the Home/New Tab page forces the agent to open a new tab (`tabs action="new"`). Because chat sessions are tracked per-tab, this new tab has an empty chat history, hiding previous context.
+* **Cause:** The agent instructions/guidelines warn the model not to touch user-owned tabs and instead open its own. Additionally, because the Home page is hosted on an internal extension URL (`chrome-extension://.../app.html`), it matched the `EXCLUDED_URL_PREFIXES` array and was completely hidden from the page list, preventing the agent from resolving its Page ID or navigating it.
+* **Solution:**
+  1. Updated the prompt system templates, tool descriptions, and skills guides to instruct the agent to prioritize executing and navigating directly in the current active tab.
+  2. Bypassed the URL exclusion filter in `PageManager.list()` if `tab.isActive` is `true`. This lets the agent see and target the Home page, allowing it to navigate the active window directly.
+

@@ -267,6 +267,8 @@ export const ChatError: FC<ChatErrorProps> = ({
 }) => {
   const [copiedDetails, setCopiedDetails] = useState(false)
   const view = buildView(error.message, providerType)
+  const markCreditsExhausted = useMarkCreditsExhausted()
+  const invalidateCredits = useInvalidateCredits()
 
   const surveyUrl = useMemo(
     () =>

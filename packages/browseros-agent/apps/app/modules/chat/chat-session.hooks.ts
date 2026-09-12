@@ -32,6 +32,12 @@ import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import {
+  clearActiveSession,
+  consumeRestorePending,
+  readActiveSession,
+  saveActiveSession,
+} from '@/lib/browseros/activeSessionStorage'
 
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
@@ -234,8 +240,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const [restoredConversationId, setRestoredConversationId] = useState<
     string | null
   >(null)
+  const [isRestoringFromSession, setIsRestoringFromSession] = useState(false)
+  const [hasRestorableSession, setHasRestorableSession] = useState(false)
   const isRestoringConversation =
-    !!conversationIdParam && restoredConversationId !== conversationIdParam
+    (!!conversationIdParam && restoredConversationId !== conversationIdParam) ||
+    isRestoringFromSession
 
   // 'local': the local server owns history, persisting it to SQLite during
   // /chat. Every signed-in user now takes this path too, where the client used
@@ -525,6 +534,46 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     },
   })
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only run once on mount
+  useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
+    let cancelled = false
+    const tryRestore = async () => {
+      const shouldAutoRestore = await consumeRestorePending()
+      const saved = await readActiveSession()
+      if (!saved || cancelled || saved.messages.length === 0) return
+
+      if (shouldAutoRestore) {
+        // Agent navigated here → silently restore so panel mirrors original tab
+        setConversationId(
+          saved.conversationId as ReturnType<typeof crypto.randomUUID>,
+        )
+        setMessages(saved.messages)
+        setIsRestoringFromSession(true)
+        setTimeout(() => {
+          if (!cancelled) setIsRestoringFromSession(false)
+        }, 150)
+      } else {
+        // User opened tab manually → offer the restore pill
+        setHasRestorableSession(true)
+      }
+    }
+    tryRestore()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /**
+   * Keep session storage current whenever messages change so other panels
+   * can restore mid-flight or after the agent finishes.
+   */
+  useEffect(() => {
+    if (options?.origin !== 'sidepanel') return
+    if (messages.length === 0) return
+    saveActiveSession(conversationIdRef.current, messages)
+  }, [options?.origin, messages])
 
   const detachView = useCallback(async () => {
     await detachStream()

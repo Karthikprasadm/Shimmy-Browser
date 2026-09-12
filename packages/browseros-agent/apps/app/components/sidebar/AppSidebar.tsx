@@ -8,12 +8,14 @@ export interface AppSidebarProps {
   expanded?: boolean
   onOpenShortcuts?: () => void
   onNavigate?: () => void
+  onSidebarAutoCollapse?: () => void
 }
 
 export const AppSidebar: FC<AppSidebarProps> = ({
   expanded = false,
   onOpenShortcuts,
   onNavigate,
+  onSidebarAutoCollapse,
 }) => {
   return (
     <div

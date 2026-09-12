@@ -56,26 +56,71 @@ async function navigateBrowser(port: number, url: string): Promise<boolean> {
     const listRes = await fetch(`http://127.0.0.1:${port}/json/list`)
     const targets = (await listRes.json()) as CdpTarget[]
     const pageTarget = targets.find((t) => t.type === 'page')
-    if (!pageTarget) return false
-
-    const wsUrl = pageTarget.webSocketDebuggerUrl
-    if (!wsUrl) return false
+    if (!pageTarget?.webSocketDebuggerUrl) return false
 
     return new Promise((resolve) => {
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(pageTarget.webSocketDebuggerUrl!)
+      let step = 1
+
       ws.onopen = () => {
+        // First navigate to chrome://extensions to ensure developer mode is activated
         ws.send(
           JSON.stringify({
             id: 1,
             method: 'Page.navigate',
-            params: { url },
+            params: { url: 'chrome://extensions' },
           }),
         )
-        setTimeout(() => {
-          ws.close()
-          resolve(true)
-        }, 500)
       }
+
+      ws.onmessage = () => {
+        if (step === 1) {
+          step = 2
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                id: 2,
+                method: 'Runtime.evaluate',
+                params: {
+                  expression: `
+                    (async () => {
+                      try {
+                        if (typeof chrome !== 'undefined' && chrome.developerPrivate) {
+                          await chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true });
+                        }
+                        const manager = document.querySelector('extensions-manager');
+                        const toolbar = manager?.shadowRoot?.querySelector('extensions-toolbar');
+                        const devModeToggle = toolbar?.shadowRoot?.querySelector('#devMode');
+                        if (devModeToggle && !devModeToggle.checked) {
+                          devModeToggle.click();
+                        }
+                      } catch {}
+                    })()
+                  `,
+                  awaitPromise: true,
+                },
+              }),
+            )
+          }, 400)
+        } else if (step === 2) {
+          step = 3
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                id: 3,
+                method: 'Page.navigate',
+                params: { url },
+              }),
+            )
+          }, 300)
+        } else if (step === 3) {
+          setTimeout(() => {
+            ws.close()
+            resolve(true)
+          }, 500)
+        }
+      }
+
       ws.onerror = () => resolve(false)
     })
   } catch {
@@ -97,6 +142,15 @@ async function main(): Promise<void> {
   const stackEnv = loadStackEnv()
   const cdpPort = Number(stackEnv.BROWSEROS_CDP_PORT) || 9333
   const serverPort = Number(stackEnv.BROWSEROS_SERVER_PORT) || 9111
+
+  if (process.platform === 'win32') {
+    try {
+      const { execSync } = await import('node:child_process')
+      execSync(
+        `powershell -Command "Get-NetTCPConnection -LocalPort ${cdpPort}, ${serverPort} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"`,
+      )
+    } catch {}
+  }
 
   stackEnv.VITE_BROWSEROS_SERVER_PORT = String(serverPort)
 

@@ -1,29 +1,5 @@
 # Shimmy-Browser
 
-<div align="center">
-<img width="693" height="415" alt="BrowserOS neo: the missing browser for your AI agents" src="https://github.com/user-attachments/assets/8129f9c8-e8f4-4afe-834a-91397121d833" />
-
-<br></br>
-<a href="https://discord.gg/YKwjt5vuKr"><img src="https://img.shields.io/badge/Discord-555?logo=discord" alt="Discord" /></a>
-<a href="https://dub.sh/browserOS-slack"><img src="https://img.shields.io/badge/Slack-555?logo=slack" alt="Slack" /></a>
-<a href="https://x.com/browserOS_ai"><img src="https://img.shields.io/badge/@browserOS__ai-555?logo=x" alt="X / Twitter" /></a>
-<a href="https://github.com/browseros-ai/BrowserOS"><img src="https://img.shields.io/github/stars/browseros-ai/BrowserOS?style=flat&logo=github&label=stars&color=4c71f2" alt="GitHub stars" /></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-555" alt="AGPL-3.0" /></a>
-<br></br>
-
-<a href="https://www.producthunt.com/products/browseros_ai?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-browseros-neo" target="_blank" rel="noopener noreferrer"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1031913&amp;theme=dark&amp;t=1786088428884" /><img alt="BrowserOS neo - The Missing Browser for Claude, Cowork &amp; Codex | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1031913&amp;theme=light&amp;t=1786088428884" /></picture></a>
-<a href="https://trendshift.io/repositories/16468?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-16468" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/16468/daily?language=TypeScript" alt="browseros-ai%2FBrowserOS | Trendshift" width="250" height="55"/></a>
-<br></br>
-
-<a href="https://cdn.browseros.com/download/BrowserOS_neo.dmg"><img src="https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
-<a href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
-
-**[Website](https://www.browseros.com)** · **[Docs](https://docs.browseros.com)** · **[Enterprise](mailto:founders@browseros.com?subject=Enterprise%3A%20BrowserOS%20neo&body=Hi%2C%0A%0AWe%27re%20looking%20at%20BrowserOS%20neo%20for%20our%20team.%0A%0ACompany%3A%0ATeam%20size%3A%0AWhat%20we%20want%20to%20automate%3A)**
-
-Free · Open source · Everything runs on your machine
-
-</div>
-
 A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
 
 BrowserOS neo is not a Chrome replacement. It is a secondary browser that sits next to Chrome, made friendly to agents.

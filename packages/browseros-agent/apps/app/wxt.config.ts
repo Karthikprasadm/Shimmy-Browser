@@ -20,6 +20,9 @@ const apiPattern = apiUrl.port
 export default defineConfig({
   outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
+  webExt: {
+    disabled: true,
+  },
   hooks: {
     // All Vite builds (including Sentry uploads) finish before this hook; WXT's
     // ZIP and the release CRX packer then consume the extension without maps.

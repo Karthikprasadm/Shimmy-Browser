@@ -1,3 +1,4 @@
+import { WebExtensionBlocker } from '@ghostery/adblocker-webextension'
 import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { storage } from '@wxt-dev/storage'
 import { Capabilities } from '@/lib/browseros/capabilities'
@@ -263,6 +264,20 @@ export default defineBackground(() => {
   chrome.tabs.onCreated.addListener((tab) => {
     if (tab.id !== undefined) preparePanel(tab.id)
   })
+
+  // Initialize adblocker using local filter rules
+  try {
+    fetch(chrome.runtime.getURL('easylist.txt'))
+      .then((r) => r.text())
+      .then((text) => {
+        try {
+          const blocker = WebExtensionBlocker.parse(text)
+          // biome-ignore lint/suspicious/noExplicitAny: compatibility
+          blocker.enableBlockingInBrowser(chrome as any)
+        } catch {}
+      })
+      .catch(() => null)
+  } catch {}
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()

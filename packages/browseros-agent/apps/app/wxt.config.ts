@@ -76,8 +76,10 @@ export default defineConfig({
       'alarms',
       'webNavigation',
       'downloads',
+      'webRequest',
+      'webRequestBlocking',
     ],
-    host_permissions: ['http://127.0.0.1/*'],
+    host_permissions: ['http://127.0.0.1/*', '<all_urls>'],
   },
   vite: () => ({
     build: {

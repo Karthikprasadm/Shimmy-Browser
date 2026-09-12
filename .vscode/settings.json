@@ -2,6 +2,10 @@
   "terminal.integrated.tabs.title": "${sequence} ${process}",
   "terminal.integrated.tabs.description": "${cwd}",
   "files.associations": {
-    "**/packages/browseros/chromium_patches/**/*": "diff"
+    "**/packages/browseros/chromium_patches/**/*": "diff",
+    "**/BROWSEROS_VERSION": "properties",
+    "BROWSEROS_VERSION": "properties",
+    "**/BROWSEROS_BUILD_OFFSET": "properties",
+    "BROWSEROS_BUILD_OFFSET": "properties"
   }
 }

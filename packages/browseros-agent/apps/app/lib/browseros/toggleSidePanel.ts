@@ -1,5 +1,8 @@
 import { sidePanelPerWindowStorage } from './sidePanelOpenStateStorage'
 
+export const SHIMMY_AGENT_SIDEPANEL_BUSY_KEY = 'shimmyAgentSidepanelBusy' as const
+export const SHIMMY_SIDEPANEL_LAST_TAB_KEY = 'shimmySidepanelLastTabId' as const
+
 export type SidePanelTarget = { tabId: number; windowId: number }
 export type SidePanelToggleResult = { opened: boolean }
 

@@ -12,8 +12,11 @@ import {
   initializeSidePanelOptions,
   openSidePanel,
   prepareTabSidePanel,
+  SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
+  SHIMMY_SIDEPANEL_LAST_TAB_KEY,
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
+import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
 import { setupLlmProvidersBackupToBrowserOS } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
@@ -23,7 +26,10 @@ import {
 } from '@/lib/messaging/runtime/runtimeMessages'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
+import {
+  authRedirectPathStorage,
+  onboardingShownOnceStorage,
+} from '@/lib/onboarding/onboardingStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { openBrowserOSHomeOnStartupStorage } from '@/lib/startup/startup-storage'
@@ -325,9 +331,9 @@ export default defineBackground(() => {
           | number
           | undefined
         if (!agentBusy && lastOpenTabId !== tabId) return
-        if (lastOpenTabId === tabId) return
+        if (typeof tab.windowId !== 'number') return
         markRestorePending()
-        return openSidePanel(tabId)
+        return openSidePanel({ tabId, windowId: tab.windowId })
       })
       .catch(() => null)
   })

@@ -77,7 +77,7 @@ export function FilterBar({
           {selectedAgent ? (
             <>
               <AgentDot slug={selectedAgent.slug} />
-              {selectedAgent.agentLabel}
+              {selectedAgent.slug}
             </>
           ) : (
             'Agent'
@@ -98,7 +98,7 @@ export function FilterBar({
               onClick={() => onAgentChange(opt.slug)}
             >
               <AgentDot slug={opt.slug} className="mr-1.5" />
-              <span className="flex-1">{opt.agentLabel}</span>
+              <span className="flex-1">{opt.slug}</span>
               <span className="ml-2 text-[11.5px] text-ink-3">{opt.count}</span>
               {selectedAgentSlug === opt.slug && (
                 <Check className="ml-2 size-3.5" />
@@ -192,7 +192,7 @@ export function FilterBar({
         <Input
           value={localSearch}
           onChange={(e) => setLocalSearch(e.target.value)}
-          placeholder="search sessions..."
+          placeholder="search sessions, summaries..."
           // pr-7 reserves space for the inline clear button so the
           // text never sits under the icon.
           className="h-8 w-64 rounded-9 border-none bg-card pr-7 pl-8 font-mono text-[13px] text-ink shadow-xs placeholder:text-ink-3 focus-visible:ring-0"

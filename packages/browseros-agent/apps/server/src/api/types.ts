@@ -23,6 +23,10 @@ export type { BrowserContext }
 export const AgentLLMConfigSchema = LLMConfigSchema.extend({
   model: z.string().min(1, 'Model name is required'),
   upstreamProvider: z.string().optional(),
+  // Set when testing an existing provider. Its stored credentials are redacted
+  // from the client, so the test route fills blank credential fields from the
+  // saved row (matching type) rather than failing on an empty key.
+  providerId: z.string().optional(),
 })
 
 const PreviousConversationSchema = z
@@ -51,6 +55,7 @@ const ChatInputSchema = z.object({
   isScheduledTask: z.boolean().optional().default(false),
   userWorkingDir: z.string().min(1).optional(),
   supportsImages: z.boolean().optional().default(true),
+  supportsReasoning: z.boolean().optional().default(true),
   mode: z.enum(['chat', 'agent']).optional().default('agent'),
   origin: z.enum(['sidepanel', 'newtab']).optional().default('sidepanel'),
   declinedApps: z.array(z.string()).optional(),
@@ -62,6 +67,11 @@ const ChatInputSchema = z.object({
     })
     .optional(),
   previousConversation: PreviousConversationSchema,
+  // 'local': the server owns history in SQLite (load + persist). 'cloud': the
+  // client owns history (logged-in cloud sync or incognito); the server stays
+  // stateless and persists nothing. Defaults to 'cloud' so existing clients are
+  // unchanged until they opt into server-owned history.
+  historyMode: z.enum(['local', 'cloud']).optional().default('cloud'),
   attachments: z
     .array(
       z.object({
@@ -72,20 +82,33 @@ const ChatInputSchema = z.object({
     .optional(),
 })
 
-const BrowserOsChatRequestSchema = z
-  .object({
-    ...AgentLLMConfigSchema.shape,
-    ...ChatInputSchema.shape,
-  })
+/**
+ * The provider half of a chat request, now optional.
+ *
+ * The server holds the provider list and which one is selected, so a client
+ * only has to name an id, and need not even do that: with nothing given the
+ * selected provider is used. Every field stays accepted because the extension
+ * updates independently of the browser binary, so a shipped build can be
+ * running a client that still sends the whole configuration inline. The server
+ * can stop requiring these; it cannot stop accepting them.
+ */
+const OptionalAgentLLMConfigSchema = LLMConfigSchema.partial().extend({
+  model: z.string().min(1).optional(),
+  upstreamProvider: z.string().optional(),
+})
+
+const BrowserOsChatRequestSchema = OptionalAgentLLMConfigSchema.merge(
+  ChatInputSchema,
+)
   .extend({
-    target: BrowserOsAgentTargetSchema.optional(),
-    acpAgentId: z.never().optional(),
+    target: BrowserOsAgentTargetSchema.partial({ providerId: true }).optional(),
   })
   .transform((request) => ({
     ...request,
-    target: request.target ?? {
+    target: {
       type: 'browseros' as const,
-      providerId: request.providerId || request.provider,
+      providerId:
+        request.target?.providerId || request.providerId || request.provider,
     },
   }))
 
@@ -100,6 +123,21 @@ export const ChatRequestSchema = z.union([
 
 export type AcpChatRequest = z.infer<typeof AcpChatRequestSchema>
 export type BrowserOsChatRequest = z.infer<typeof BrowserOsChatRequestSchema>
+
+/**
+ * A browseros request after its provider has been filled from the stored row.
+ *
+ * The wire shape leaves the provider optional so a client can send an id alone,
+ * or nothing at all. Everything past the route boundary needs it resolved, and
+ * this type is what says so rather than an assertion at the call site.
+ */
+export type HydratedBrowserOsChatRequest = BrowserOsChatRequest & {
+  provider: NonNullable<BrowserOsChatRequest['provider']>
+  target: { type: 'browseros'; providerId: string }
+}
+
+/** What the chat service works on: every provider already resolved. */
+export type HydratedChatRequest = AcpChatRequest | HydratedBrowserOsChatRequest
 export type ChatRequest = z.infer<typeof ChatRequestSchema>
 
 export type Env = {

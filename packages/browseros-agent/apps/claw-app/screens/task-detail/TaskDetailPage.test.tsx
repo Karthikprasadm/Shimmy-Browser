@@ -117,11 +117,28 @@ describe('TaskDetailPage', () => {
     }
     const html = render()
     expect(html).toContain('Browsed example.com')
-    expect(html).toContain('Claude Code')
+    expect(html).toContain('claude-code')
     expect(html).toContain('Timeline')
     expect(html).toContain('Screenshots')
     expect(html).toContain('Open final URL')
     expect(html).not.toContain('/audit/screenshot/2')
+  })
+
+  it('renders the task summary in the header when present', () => {
+    dataOverride = {
+      ...baseData,
+      detail: {
+        ...sampleTask,
+        session: {
+          ...sampleTask.session,
+          taskSummary: 'Checked warranty terms across three retailer pages.',
+        },
+      },
+    }
+    const html = render()
+    expect(html).toContain(
+      'Checked warranty terms across three retailer pages.',
+    )
   })
 
   it('renders the total token consumption on the summary card', () => {

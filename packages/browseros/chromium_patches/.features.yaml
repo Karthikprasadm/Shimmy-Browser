@@ -165,7 +165,6 @@ features:
     files:
       - chrome/browser/browseros/metrics/
       - chrome/browser/metrics/chrome_metrics_service_client.cc
-      - chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
       - chrome/browser/ui/webui/settings/browseros_metrics_handler.cc
       - chrome/browser/ui/webui/settings/browseros_metrics_handler.h
       - chrome/browser/ui/webui/settings/settings_ui.cc
@@ -476,3 +475,19 @@ features:
       - chrome/browser/ui/startup/startup_launch_infobar_delegate.cc
       - chrome/browser/ui/startup/startup_launch_infobar_delegate.h
       - chrome/browser/ui/views/session_restore_infobar/
+
+  mac-passkeys:
+    description: "feat: macOS passkey entitlements"
+    files:
+      - chrome/app/app-entitlements-browseros.plist
+
+  extension-startup-readiness:
+    description: "feat: bundled extension startup readiness"
+    files:
+      - chrome/browser/chrome_content_browser_client_navigation_throttles.cc
+      - chrome/browser/extensions/external_provider_impl.h
+      - chrome/browser/extensions/external_provider_manager.cc
+      - extensions/browser/crx_installer.cc
+      - extensions/browser/crx_installer.h
+      - extensions/browser/external_install_info.cc
+      - extensions/browser/external_install_info.h

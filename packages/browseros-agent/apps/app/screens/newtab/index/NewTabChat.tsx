@@ -13,14 +13,12 @@ import {
   NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT,
   NEWTAB_TAB_REMOVED_EVENT,
   NEWTAB_TAB_TOGGLED_EVENT,
-  NEWTAB_VOICE_ERROR_EVENT,
-  NEWTAB_VOICE_RECORDING_STARTED_EVENT,
-  NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
-  NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import { consumePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatActions } from '@/modules/chat-actions/chat-actions.hooks'
+import { useActiveConversation } from '@/modules/conversations/active-conversation-context'
+import { conversationTitle } from '@/modules/conversations/history-list'
 import { ChatEmptyState } from '@/screens/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/screens/sidepanel/index/ChatError'
 import { ChatFooter } from '@/screens/sidepanel/index/ChatFooter'
@@ -30,7 +28,7 @@ import { ChatMessages } from '@/screens/sidepanel/index/ChatMessages'
 export const NewTabChat: FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const hasSentInitialRef = useRef(false)
-  const hasOpenedVoiceRef = useRef(false)
+  const { setId: setActiveConversationId } = useActiveConversation()
 
   const {
     mode,
@@ -47,6 +45,9 @@ export const NewTabChat: FC = () => {
     disliked,
     onClickDislike,
     isRestoringConversation,
+    restoreError,
+    retryRestoreConversation,
+    conversationId,
     providers,
     selectedProvider,
     handleSelectProvider,
@@ -55,8 +56,6 @@ export const NewTabChat: FC = () => {
     setInput,
     attachedTabs,
     mounted,
-    voiceState,
-    voiceLoop,
     handleModeChange,
     handleStop,
     toggleTabSelection,
@@ -72,18 +71,20 @@ export const NewTabChat: FC = () => {
       tabToggled: NEWTAB_TAB_TOGGLED_EVENT,
       tabRemoved: NEWTAB_TAB_REMOVED_EVENT,
       aiTriggered: NEWTAB_AI_TRIGGERED_EVENT,
-      voiceRecordingStarted: NEWTAB_VOICE_RECORDING_STARTED_EVENT,
-      voiceRecordingStopped: NEWTAB_VOICE_RECORDING_STOPPED_EVENT,
-      voiceTranscriptionCompleted: NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT,
-      voiceError: NEWTAB_VOICE_ERROR_EVENT,
     },
   })
+
+  useEffect(() => {
+    setActiveConversationId(isRestoringConversation ? null : conversationId)
+    return () => setActiveConversationId(null)
+  }, [conversationId, isRestoringConversation, setActiveConversationId])
 
   // Send the initial message from URL query params (from /home search bar).
   // Guarded by ref to prevent double-fire in React Strict Mode.
   // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
   useEffect(() => {
     if (hasSentInitialRef.current) return
+    if (searchParams.has('conversationId')) return
     const pending = consumePendingHomeMessage(searchParams.get('handoff'))
     const query = pending?.text ?? searchParams.get('q') ?? ''
     const chatMode = searchParams.get('mode')
@@ -129,20 +130,6 @@ export const NewTabChat: FC = () => {
     }
   }, [])
 
-  // Honour the `?voice=open` deep link from the home composer's voice-mode
-  // entry button: open the voice loop once after mount and strip the param
-  // so a refresh doesn't reopen it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: must only run once on mount
-  useEffect(() => {
-    if (hasOpenedVoiceRef.current) return
-    if (searchParams.get('voice') !== 'open') return
-    hasOpenedVoiceRef.current = true
-    const next = new URLSearchParams(searchParams)
-    next.delete('voice')
-    setSearchParams(next, { replace: true })
-    void voiceLoop.open()
-  }, [])
-
   const handleNewConversation = () => {
     track(NEWTAB_CHAT_RESET_EVENT, { message_count: messages.length })
     resetConversation()
@@ -152,42 +139,76 @@ export const NewTabChat: FC = () => {
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
-      <div className="mx-auto w-full max-w-3xl">
-        <ChatHeader
-          selectedProvider={selectedProvider}
-          providers={providers}
-          onSelectProvider={handleSelectProvider}
-          onNewConversation={handleNewConversation}
-          hasMessages={messages.length > 0}
-          hideHistory
-        />
-      </div>
+      <ChatHeader
+        selectedProvider={selectedProvider}
+        providers={providers}
+        onSelectProvider={handleSelectProvider}
+        onNewConversation={handleNewConversation}
+        hasMessages={messages.length > 0}
+        hideHistory
+        className="shrink-0 px-4 sm:px-8"
+      />
 
-      <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
+      {/* Keep transcript and composer widths in sync; only the header spans the page. */}
+      <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 sm:w-[calc(100%-4rem)] [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && !restoreError ? (
           <ChatEmptyState
             mode={mode}
             mounted={mounted}
             onSuggestionClick={handleSuggestionClick}
           />
         ) : (
-          <ChatMessages
-            messages={messages}
-            status={status}
-            getActionForMessage={getActionForMessage}
-            liked={liked}
-            onClickLike={onClickLike}
-            disliked={disliked}
-            onClickDislike={onClickDislike}
-            showJtbdPopup={false}
-            showDontShowAgain={false}
-            onTakeSurvey={() => {}}
-            onDismissJtbdPopup={() => {}}
-          />
+          <>
+            {searchParams.has('conversationId') && messages.length > 0 && (
+              <h1 className="mb-2 line-clamp-2 font-semibold text-lg">
+                {conversationTitle(
+                  messages
+                    .findLast((message) => message.role === 'user')
+                    ?.parts.filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join(' ') ?? '',
+                )}
+              </h1>
+            )}
+            <ChatMessages
+              messages={messages}
+              status={status}
+              getActionForMessage={getActionForMessage}
+              liked={liked}
+              onClickLike={onClickLike}
+              disliked={disliked}
+              onClickDislike={onClickDislike}
+              showJtbdPopup={false}
+              showDontShowAgain={false}
+              onTakeSurvey={() => {}}
+              onDismissJtbdPopup={() => {}}
+            />
+          </>
+        )}
+        {restoreError && (
+          <div role="alert" className="rounded-lg border p-4 text-sm">
+            <p>{restoreError}</p>
+            <div className="mt-3 flex gap-4">
+              <button
+                type="button"
+                onClick={retryRestoreConversation}
+                className="underline underline-offset-2"
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                onClick={handleNewConversation}
+                className="underline underline-offset-2"
+              >
+                New conversation
+              </button>
+            </div>
+          </div>
         )}
         {agentUrlError && (
           <ChatError
@@ -206,7 +227,7 @@ export const NewTabChat: FC = () => {
         )}
       </main>
 
-      <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">
+      <div className="mx-auto w-full max-w-5xl flex-shrink-0 px-4 pb-2 sm:w-[calc(100%-4rem)]">
         <ChatFooter
           mode={mode}
           onModeChange={handleModeChange}
@@ -219,9 +240,6 @@ export const NewTabChat: FC = () => {
           attachedTabs={attachedTabs}
           onToggleTab={toggleTabSelection}
           onRemoveTab={removeTab}
-          voice={voiceState}
-          voiceLoop={voiceLoop}
-          onOpenVoiceMode={voiceLoop.open}
         />
       </div>
     </div>

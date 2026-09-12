@@ -1,19 +1,9 @@
 import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
 import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
-import {
-  createDefaultBrowserOSProvider,
-  defaultProviderIdStorage,
-  providersStorage,
-} from '@/lib/llm-providers/storage'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import {
-  findChatProviderById,
-  resolveChatProvider,
-} from '../llm-providers/provider-runtime'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
@@ -73,30 +63,15 @@ interface StreamParseState {
   receivedFinish: boolean
 }
 
-const getDefaultProvider = async (): Promise<LlmProviderConfig | null> => {
-  const providers = await providersStorage.getValue()
-  if (!providers?.length) return null
-
-  const defaultProviderId = await defaultProviderIdStorage.getValue()
-  return resolveChatProvider(providers, defaultProviderId)
-}
-
-const resolveProvider = async (
-  providerId?: string,
-): Promise<LlmProviderConfig> => {
-  if (providerId) {
-    const providers = await providersStorage.getValue()
-    const match = findChatProviderById(providers ?? [], providerId)
-    if (match) return match
-  }
-  return (await getDefaultProvider()) ?? createDefaultBrowserOSProvider()
-}
-
 export async function getChatServerResponse(
   request: ChatServerRequest,
 ): Promise<ChatServerResponse> {
   const agentServerUrl = await getAgentServerUrl()
-  const provider = await resolveProvider(request.providerId)
+  // No provider lookup here any more. The server holds the list and the
+  // selection, so a job names an id or names nothing and the server resolves
+  // it. That also removes the guard this path needed when it did the lookup
+  // itself: an unreachable list could not be told apart from an empty one, so
+  // a job risked running on the built-in provider with the wrong credentials.
   const conversationId = request.conversationId ?? crypto.randomUUID()
   const personalization = await personalizationStorage.getValue()
 
@@ -119,9 +94,9 @@ export async function getChatServerResponse(
     body: JSON.stringify({
       messages: [{ role: 'user', content: request.message }],
       ...buildChatRequestBody({
+        providerId: request.providerId,
         message: request.message,
         conversationId,
-        provider,
         mode: request.mode ?? 'agent',
         browserContext:
           request.activeTab ||
@@ -138,7 +113,6 @@ export async function getChatServerResponse(
               }
             : undefined,
         userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-        supportsImages: provider.supportsImages,
         isScheduledTask: true,
       }),
     }),

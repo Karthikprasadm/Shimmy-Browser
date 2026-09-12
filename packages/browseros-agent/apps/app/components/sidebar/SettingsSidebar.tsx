@@ -1,4 +1,5 @@
 import {
+  Activity,
   ArrowLeft,
   BookOpen,
   Bot,
@@ -6,7 +7,6 @@ import {
   CreditCard,
   MessageSquare,
   Palette,
-  RotateCcw,
   Server,
 } from 'lucide-react'
 import type { FC } from 'react'
@@ -88,8 +88,8 @@ const primarySettingsSections: NavSection[] = [
 
 const helpItems: NavItem[] = [
   { name: 'Docs', href: 'https://docs.browseros.com/', icon: BookOpen },
-  { name: 'Features', to: '/onboarding/features', icon: Compass },
-  { name: 'Revisit Onboarding', to: '/onboarding', icon: RotateCcw },
+  { name: 'Features', to: '/features', icon: Compass },
+  { name: 'Diagnostics', to: '/settings/diagnostics', icon: Activity },
 ]
 
 export const SettingsSidebar: FC = () => {

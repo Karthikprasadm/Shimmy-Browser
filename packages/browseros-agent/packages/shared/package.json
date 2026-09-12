@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "jsonc-parser": "^3.3.1",
-    "zod": "^3.25.76"
+    "zod": "^4.5.2"
   },
   "exports": {
     "./constants/exit-codes": {
@@ -74,6 +74,10 @@
       "types": "./src/schemas/browser-context.ts",
       "import": "./src/schemas/browser-context.ts",
       "default": "./src/schemas/browser-context.ts"
+    },
+    "./schemas/conversation-panels": {
+      "types": "./src/schemas/conversation-panels.ts",
+      "default": "./src/schemas/conversation-panels.ts"
     },
     "./mcp/claude-code-transport-tag": {
       "types": "./src/mcp/claude-code-transport-tag.ts",

@@ -43,6 +43,55 @@
       "when": 1785900211901,
       "tag": "0005_yellow_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786538823114,
+      "tag": "0006_add_conversations",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1787580067090,
+      "tag": "0007_add_custom_acp_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788319873053,
+      "tag": "0008_add_llm_providers_and_scheduled_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788413695569,
+      "tag": "0009_add_scheduled_job_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788426799725,
+      "tag": "0010_add_unified_providers_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1788426855683,
+      "tag": "0011_drop_split_provider_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788724664440,
+      "tag": "0012_add_provider_headers",
+      "breakpoints": true
     }
   ]
 }

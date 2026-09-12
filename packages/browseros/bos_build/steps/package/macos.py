@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import ClassVar, Optional, List, Dict
 
 from ...core.context import Context
-from ...core.step import Step, ValidationError, step
+from ...lib.notarization import notarytool_wait_args
 from ...lib.utils import (
     IS_MACOS,
     log_error,
@@ -209,7 +209,7 @@ def notarize_dmg(
             str(dmg_path),
             "--keychain-profile",
             keychain_profile,
-            "--wait",
+            *notarytool_wait_args(),
         ]
         if keychain_path:
             submit_cmd.extend(["--keychain", str(keychain_path)])
@@ -233,7 +233,7 @@ def notarize_dmg(
                     notarization_env["team_id"],
                     "--password",
                     notarization_env["notarization_pwd"],
-                    "--wait",
+                    *notarytool_wait_args(),
                 ],
                 check=False,
             )

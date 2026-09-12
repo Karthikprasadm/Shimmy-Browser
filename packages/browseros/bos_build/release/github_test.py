@@ -9,10 +9,13 @@ from unittest import mock
 from bos_build.release.github import (
     create_pull_request,
     edit_pull_request_body,
+    github_release_tag,
     inspect_github_release,
     list_github_releases,
     list_pull_requests,
+    mark_pull_request_ready,
     merge_pull_request,
+    normalize_version,
 )
 
 
@@ -28,7 +31,44 @@ class RecordingRunner:
 
 class PullRequestAdapterTest(unittest.TestCase):
     def test_lists_pull_requests_as_json(self) -> None:
-        runner = RecordingRunner(stdout=json.dumps([{"number": 42}]))
+        runner = RecordingRunner(
+            stdout=json.dumps(
+                [
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequests": {
+                                    "nodes": [
+                                        {
+                                            "number": 41,
+                                            "headRefName": "unrelated",
+                                        },
+                                        {
+                                            "number": 42,
+                                            "headRefName": "bot/release-browseros",
+                                        },
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequests": {
+                                    "nodes": [
+                                        {
+                                            "number": 43,
+                                            "headRefName": "bot/release-browseros",
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    },
+                ]
+            )
+        )
 
         records = list_pull_requests(
             "browseros-ai/BrowserOS",
@@ -37,11 +77,11 @@ class PullRequestAdapterTest(unittest.TestCase):
             runner=runner,
         )
 
-        self.assertEqual(records, [{"number": 42}])
+        self.assertEqual([record["number"] for record in records], [42, 43])
         command = runner.calls[0][0]
-        self.assertEqual(command[:3], ["gh", "pr", "list"])
-        self.assertIn("--head", command)
-        self.assertIn("--json", command)
+        self.assertEqual(command[:3], ["gh", "api", "graphql"])
+        self.assertIn("--paginate", command)
+        self.assertIn("--slurp", command)
 
     def test_creates_and_edits_pull_request_without_changing_git(self) -> None:
         create_runner = RecordingRunner(
@@ -65,7 +105,38 @@ class PullRequestAdapterTest(unittest.TestCase):
 
         self.assertTrue(url.endswith("/42"))
         self.assertEqual(create_runner.calls[0][0][:3], ["gh", "pr", "create"])
+        self.assertNotIn("--draft", create_runner.calls[0][0])
         self.assertEqual(edit_runner.calls[0][0][:3], ["gh", "pr", "edit"])
+
+    def test_draft_creation_and_ready_transition_are_explicit(self) -> None:
+        create_runner = RecordingRunner(
+            stdout="https://github.com/browseros-ai/BrowserOS/pull/42\n"
+        )
+        create_pull_request(
+            repo="browseros-ai/BrowserOS",
+            head="bot/release-nightly-111111111111",
+            base="main",
+            title="chore(release): nightly family transaction",
+            body="suite body",
+            draft=True,
+            runner=create_runner,
+        )
+        ready_runner = RecordingRunner()
+
+        mark_pull_request_ready("browseros-ai/BrowserOS", 42, runner=ready_runner)
+
+        self.assertIn("--draft", create_runner.calls[0][0])
+        self.assertEqual(
+            ready_runner.calls[0][0],
+            [
+                "gh",
+                "pr",
+                "ready",
+                "42",
+                "--repo",
+                "browseros-ai/BrowserOS",
+            ],
+        )
 
     def test_merges_pull_request_and_returns_merge_commit(self) -> None:
         runner = RecordingRunner(stdout=json.dumps({"mergeCommit": {"oid": "3" * 40}}))
@@ -86,6 +157,21 @@ class PullRequestAdapterTest(unittest.TestCase):
 
 
 class ReleaseAdapterTest(unittest.TestCase):
+    def test_release_tag_preserves_nonzero_browser_patch(self) -> None:
+        self.assertEqual(normalize_version("0.50.0.3"), "0.50.0.3")
+        self.assertEqual(
+            github_release_tag("0.50.0.3", "browseros"),
+            "v0.50.0.3",
+        )
+        self.assertEqual(
+            github_release_tag("0.50.0.3", "browserclaw"),
+            "browserclaw/v0.50.0.3",
+        )
+
+    def test_release_tag_omits_zero_browser_patch(self) -> None:
+        self.assertEqual(normalize_version("0.50.0.0"), "0.50.0")
+        self.assertEqual(github_release_tag("0.50.0.0", "browseros"), "v0.50.0")
+
     def test_lists_paginated_releases_with_normalized_fields(self) -> None:
         runner = RecordingRunner(
             stdout=json.dumps(

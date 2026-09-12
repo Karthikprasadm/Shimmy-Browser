@@ -61,10 +61,6 @@ export const QWEN_CODE_OAUTH_DISCONNECTED_EVENT =
 export const HUB_PROVIDER_ADDED_EVENT = 'settings.hub_provider.added'
 
 /** @public */
-export const MCP_PROMO_BANNER_CLICKED_EVENT =
-  'settings.mcp_promo_banner.clicked'
-
-/** @public */
 export const BROWSERCLAW_MCP_BANNER_CLICKED_EVENT =
   'settings.browserclaw_mcp_banner.clicked'
 
@@ -159,21 +155,6 @@ export const NEWTAB_CHAT_SUGGESTION_CLICKED_EVENT =
 export const NEWTAB_CHAT_MODE_CHANGED_EVENT = 'newtab.chat.mode_changed'
 
 /** @public */
-export const NEWTAB_VOICE_RECORDING_STARTED_EVENT =
-  'newtab.voice.recording_started'
-
-/** @public */
-export const NEWTAB_VOICE_RECORDING_STOPPED_EVENT =
-  'newtab.voice.recording_stopped'
-
-/** @public */
-export const NEWTAB_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
-  'newtab.voice.transcription_completed'
-
-/** @public */
-export const NEWTAB_VOICE_ERROR_EVENT = 'newtab.voice.error'
-
-/** @public */
 export const SIDEPANEL_AI_TRIGGERED_EVENT = 'sidepanel.ai.triggered'
 
 /** @public */
@@ -222,42 +203,7 @@ export const SCHEDULED_TASK_RETRIED_EVENT = 'settings.scheduled_task.retried'
 export const JTBD_POPUP_DISMISSED_EVENT = 'ui.jtbd_popup.dismissed'
 
 /** @public */
-export const ONBOARDING_STARTED_EVENT = 'onboarding.started'
-
-/** @public */
-export const ONBOARDING_STEP_VIEWED_EVENT = 'onboarding.step.viewed'
-
-/** @public */
-export const ONBOARDING_STEP_COMPLETED_EVENT = 'onboarding.step.completed'
-
-/** @public */
-export const ONBOARDING_ABOUT_SUBMITTED_EVENT = 'onboarding.about.submitted'
-
-/** @public */
-export const ONBOARDING_CONNECT_APPS_VIEWED_EVENT =
-  'onboarding.connect_apps.viewed'
-
-/** @public */
-export const ONBOARDING_APP_CONNECTED_EVENT = 'onboarding.app.connected'
-
-/** @public */
-export const ONBOARDING_CONNECT_APPS_SKIPPED_EVENT =
-  'onboarding.connect_apps.skipped'
-
-/** @public */
-export const ONBOARDING_SIGNIN_COMPLETED_EVENT = 'onboarding.signin.completed'
-
-/** @public */
-export const ONBOARDING_SIGNIN_SKIPPED_EVENT = 'onboarding.signin.skipped'
-
-/** @public */
-export const ONBOARDING_DEMO_TRIGGERED_EVENT = 'onboarding.demo.triggered'
-
-/** @public */
 export const ONBOARDING_FEATURE_CLICKED_EVENT = 'onboarding.feature.clicked'
-
-/** @public */
-export const ONBOARDING_COMPLETED_EVENT = 'onboarding.completed'
 
 /** @public */
 export const BREADCRUMB_SCHEDULE_CLICKED_EVENT = 'breadcrumb.schedule.clicked'
@@ -281,40 +227,3 @@ export const KIMI_API_KEY_CONFIGURED_EVENT = 'settings.kimi.api_key_configured'
 /** @public */
 export const KIMI_API_KEY_GUIDE_CLICKED_EVENT =
   'settings.kimi.api_key_guide_clicked'
-
-/** @public */
-export const SIDEPANEL_VOICE_RECORDING_STARTED_EVENT =
-  'sidepanel.voice.recording_started'
-
-/** @public */
-export const SIDEPANEL_VOICE_RECORDING_STOPPED_EVENT =
-  'sidepanel.voice.recording_stopped'
-
-/** @public */
-export const SIDEPANEL_VOICE_TRANSCRIPTION_COMPLETED_EVENT =
-  'sidepanel.voice.transcription_completed'
-
-/** @public */
-export const SIDEPANEL_VOICE_ERROR_EVENT = 'sidepanel.voice.error'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_OPENED_EVENT = 'sidepanel.voice_mode.opened'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_CLOSED_EVENT = 'sidepanel.voice_mode.closed'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_TURN_CAPTURED_EVENT =
-  'sidepanel.voice_mode.turn_captured'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_BARGE_IN_EVENT =
-  'sidepanel.voice_mode.barge_in'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_STOP_AGENT_EVENT =
-  'sidepanel.voice_mode.stop_agent'
-
-/** @public */
-export const SIDEPANEL_VOICE_MODE_TRANSCRIBE_FAILED_EVENT =
-  'sidepanel.voice_mode.transcribe_failed'

@@ -1,6 +1,14 @@
-import { Bot, Github, History, Plus, SettingsIcon } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  Github,
+  History,
+  Plus,
+  SettingsIcon,
+} from 'lucide-react'
 import type { FC } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { CreditBadge } from '@/components/credits/CreditBadge'
@@ -9,6 +17,7 @@ import { Feature } from '@/lib/browseros/capabilities'
 import { productRepositoryUrl } from '@/lib/constants/productUrls'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
+import { cn } from '@/lib/utils'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useCredits } from '@/modules/credits/credits.hooks'
 
@@ -31,6 +40,8 @@ export interface ChatHeaderProps {
   onNewConversation: () => void
   hasMessages: boolean
   hideHistory?: boolean
+  /** Lets the full-page chat opt into spacing without changing the sidepanel. */
+  className?: string
 }
 
 export const ChatHeader: FC<ChatHeaderProps> = ({
@@ -40,6 +51,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   onNewConversation,
   hasMessages,
   hideHistory,
+  className,
 }) => {
   const location = useLocation()
   const navigate = useNavigate()
@@ -51,7 +63,12 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   }
 
   return (
-    <header className="flex items-center justify-between border-border/40 border-b bg-background/80 px-3 py-2.5 backdrop-blur-md">
+    <header
+      className={cn(
+        'flex items-center justify-between border-border/40 border-b bg-background/80 px-3 py-2.5 backdrop-blur-md',
+        className,
+      )}
+    >
       <div className="flex items-center gap-2">
         {/* Provider Selector */}
         <ChatProviderSelector
@@ -61,22 +78,14 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
         >
           <button
             type="button"
-            className="group relative inline-flex cursor-pointer items-center gap-2 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground data-[state=open]:bg-accent"
+            className="group relative inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2 py-1.5 text-foreground transition-colors hover:border-[var(--accent-orange)]/40 hover:bg-muted/50 data-[state=open]:border-[var(--accent-orange)]/50 data-[state=open]:bg-accent"
             title="Change AI Provider"
           >
-            {selectedProvider.kind === 'acp' ? (
-              <Bot className="h-[18px] w-[18px]" />
-            ) : selectedProvider.type === 'browseros' ? (
-              <BrowserOSIcon size={18} />
-            ) : (
-              <ProviderIcon
-                type={selectedProvider.type as ProviderType}
-                size={18}
-              />
-            )}
+            <HeaderProviderIcon provider={selectedProvider} />
             <span className="font-semibold text-base">
               {selectedProvider.name}
             </span>
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
           </button>
         </ChatProviderSelector>
         {selectedProvider.type === 'browseros' && <CreditsBadgeWrapper />}
@@ -141,4 +150,17 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
       </div>
     </header>
   )
+}
+
+function HeaderProviderIcon({ provider }: { provider: Provider }) {
+  if (provider.kind === 'acp') {
+    const Mark = BRAND_MARKS[provider.brandKey ?? '']
+    return Mark ? (
+      <Mark className="h-[18px] w-[18px]" />
+    ) : (
+      <Bot className="h-[18px] w-[18px]" />
+    )
+  }
+  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
+  return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }

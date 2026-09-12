@@ -1,22 +1,24 @@
-import { z } from 'zod'
+import { z } from 'zod/v4'
 import { defineTool, errorResult, textResult } from './framework'
 
 export const tabs = defineTool({
   name: 'tabs',
   description:
-    'Manage browser tabs. `list` returns every open page. `active` shows the current front page; `new` opens a fresh page; `close` closes a page. ALWAYS prioritize acting on and navigating the active tab (the tab where the user prompted you) directly; do NOT open a new tab unless the user explicitly requests it.',
-  input: z.object({
-    action: z.enum(['list', 'active', 'new', 'close']).default('list'),
-    url: z
-      .string()
-      .optional()
-      .describe('URL for action="new" (defaults to about:blank).'),
-    background: z
-      .boolean()
-      .default(false)
-      .describe('Open and select/focus the new tab for action="new".'),
-    page: z.number().int().optional().describe('Page id for action="close".'),
-  }),
+    'Manage browser tabs. `list` returns every open page, `active` shows the current front page, `new` opens a fresh page, and `close` closes a page. When a task would disrupt a tab the user is actively using, prefer cloning it: copy its URL from `list` into `tabs new`, then work in the new page.',
+  input: z
+    .object({
+      action: z.enum(['list', 'active', 'new', 'close']).default('list'),
+      url: z
+        .string()
+        .optional()
+        .describe('URL for action="new" (defaults to about:blank).'),
+      background: z
+        .boolean()
+        .default(true)
+        .describe('Open without stealing focus for action="new".'),
+      page: z.number().int().optional().describe('Page id for action="close".'),
+    })
+    .strict(),
   annotations: {
     title: 'Manage tabs',
     destructiveHint: true,

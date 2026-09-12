@@ -1,19 +1,10 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
-import { HTTPException } from 'hono/http-exception'
-import {
-  createMcpRoutes,
-  MANAGED_MCP_SERVERS_HEADER,
-  parseManagedMcpServersHeader,
-} from '../../../src/api/routes/mcp'
-import type {
-  ConnectorToolScope,
-  KlavisProxyStatus,
-} from '../../../src/api/services/klavis'
+import { createMcpRoutes } from '../../../src/api/routes/mcp'
 
 interface McpServerCreation {
-  includeStructuredContent: boolean | undefined
-  proxyStatus: KlavisProxyStatus | null
-  selectedServerNames: readonly string[] | undefined
+  leaseToken?: string
+  requestedReadOnly?: boolean
+  includeStructuredContent?: boolean
 }
 
 const serverCreations: McpServerCreation[] = []
@@ -32,25 +23,14 @@ const createMcpTransportSpy = mock((options: unknown) => {
   return new FakeTransport(options)
 })
 
-const createMcpServerSpy = mock(
-  (deps: {
-    klavis?: { getProxyStatus(): KlavisProxyStatus }
-    connectorScope?: ConnectorToolScope
-    includeStructuredContent?: boolean
-  }) => {
-    serverCreations.push({
-      includeStructuredContent: deps.includeStructuredContent,
-      proxyStatus: deps.klavis?.getProxyStatus() ?? null,
-      selectedServerNames: deps.connectorScope?.selectedServerNames,
-    })
-
-    return {
-      connect: mock(async (transport: FakeTransport) => {
-        connectCalls.push(transport)
-      }),
-    }
-  },
-)
+const createMcpServerSpy = mock((input: McpServerCreation) => {
+  serverCreations.push(input)
+  return {
+    connect: mock(async (transport: FakeTransport) => {
+      connectCalls.push(transport)
+    }),
+  }
+})
 
 beforeEach(() => {
   serverCreations.length = 0
@@ -64,9 +44,10 @@ function createTestMcpRoutes(
   overrides: Partial<Parameters<typeof createMcpRoutes>[0]> = {},
 ) {
   return createMcpRoutes({
-    version: '0.0.0-test',
-    browserSession: {} as never,
-    createMcpServer: createMcpServerSpy as never,
+    browserMcp: {
+      validateLeaseToken: () => {},
+      createMcpServer: createMcpServerSpy,
+    } as never,
     createMcpTransport: createMcpTransportSpy as never,
     ...overrides,
   })
@@ -88,78 +69,38 @@ async function postMcp(
   })
 }
 
-describe('parseManagedMcpServersHeader', () => {
-  it('returns an empty scope for missing or empty headers', () => {
-    expect(parseManagedMcpServersHeader(undefined)).toEqual([])
-    expect(parseManagedMcpServersHeader('')).toEqual([])
-  })
-
-  it('parses comma-separated encoded connector names', () => {
-    expect(parseManagedMcpServersHeader('Slack,Google%20Docs,Linear')).toEqual([
-      'Slack',
-      'Google Docs',
-      'Linear',
-    ])
-  })
-
-  it('degrades malformed encoded values to an empty scope', () => {
-    expect(parseManagedMcpServersHeader('Slack,%E0%A4%A')).toEqual([])
-  })
-})
-
 describe('createMcpRoutes', () => {
-  it('passes latest Klavis status and selected connector scope per request', async () => {
-    let status: KlavisProxyStatus = { state: 'connecting' }
-    const klavis = {
-      getProxyStatus: () => status,
-    }
-    const app = createTestMcpRoutes({
-      klavis: klavis as never,
-    })
-
-    const first = await postMcp(app)
-
-    status = { state: 'ready', toolCount: 3 }
-    const second = await postMcp(app, {
-      [MANAGED_MCP_SERVERS_HEADER]: 'Slack,Google%20Docs',
-    })
-
-    expect(first.status).toBe(200)
-    expect(second.status).toBe(200)
-    expect(serverCreations).toEqual([
-      {
-        includeStructuredContent: false,
-        proxyStatus: { state: 'connecting' },
-        selectedServerNames: [],
-      },
-      {
-        includeStructuredContent: false,
-        proxyStatus: { state: 'ready', toolCount: 3 },
-        selectedServerNames: ['Slack', 'Google Docs'],
-      },
-    ])
-    expect(transportInstances).toHaveLength(2)
-    expect(connectCalls).toEqual(transportInstances)
-  })
-
-  it('opts into browser structured content only for structured=1', async () => {
+  it('opts into structured and read-only output only for exact query flags', async () => {
     const app = createTestMcpRoutes()
 
     await postMcp(app)
-    await postMcp(app, {}, '/?structured=1')
-    await postMcp(app, {}, '/?structured=true')
+    await postMcp(app, {}, '/?structured=1&read_only=1')
+    await postMcp(app, {}, '/?structured=true&read_only=true')
 
-    expect(
-      serverCreations.map((creation) => creation.includeStructuredContent),
-    ).toEqual([false, true, false])
+    expect(serverCreations).toEqual([
+      {
+        leaseToken: undefined,
+        requestedReadOnly: false,
+        includeStructuredContent: false,
+      },
+      {
+        leaseToken: undefined,
+        requestedReadOnly: true,
+        includeStructuredContent: true,
+      },
+      {
+        leaseToken: undefined,
+        requestedReadOnly: false,
+        includeStructuredContent: false,
+      },
+    ])
   })
 
-  it('surfaces a transport HTTPException with its real status instead of masking it as 500', async () => {
+  it('returns the transport response verbatim, including its error status', async () => {
     const app = createTestMcpRoutes({
       createMcpTransport: (() => ({
-        handleRequest: async () => {
-          throw new HTTPException(406, { message: 'Not Acceptable' })
-        },
+        handleRequest: async () =>
+          new Response('Not Acceptable', { status: 406 }),
       })) as never,
     })
 
@@ -182,5 +123,17 @@ describe('createMcpRoutes', () => {
 
     expect(res.status).toBe(500)
     expect(body.error.code).toBe(-32603)
+  })
+
+  it('rejects browser-originated requests carrying Sec-Fetch-Site', async () => {
+    const app = createTestMcpRoutes()
+
+    const blocked = await postMcp(app, { 'Sec-Fetch-Site': 'cross-site' })
+    const allowed = await postMcp(app)
+
+    expect(blocked.status).toBe(403)
+    const body = (await blocked.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('FORBIDDEN_BROWSER_REQUEST')
+    expect(allowed.status).toBe(200)
   })
 })

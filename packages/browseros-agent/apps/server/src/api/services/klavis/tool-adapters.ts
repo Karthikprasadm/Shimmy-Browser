@@ -5,9 +5,9 @@
  */
 
 import type { JSONValue } from '@ai-sdk/provider'
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import type { ToolSet } from 'ai'
+import type { CallToolResult } from '@modelcontextprotocol/client'
+import { fromJsonSchema, type McpServer } from '@modelcontextprotocol/server'
+import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod'
 import { logger } from '../../../lib/logger'
 import { metrics } from '../../../lib/metrics'
@@ -35,6 +35,11 @@ export interface KlavisToolAdapterDeps {
     scope?: ConnectorToolScope,
   ) => Promise<ConnectorInventory>
   getUserIntegrations: () => Promise<UserIntegration[]>
+}
+
+export interface KlavisMcpRegistrationOptions {
+  /** Returns a user-facing rejection when the current MCP caller lacks authority. */
+  authorizeCall?: () => string | undefined
 }
 
 type ConnectorToolPayload =
@@ -215,11 +220,15 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   }
 
   for (const t of session.tools) {
-    const rawShape = session.inputSchemas.get(t.name)
     const name = t.name
     toolSet[name] = {
       description: t.description ?? '',
-      inputSchema: z.object((rawShape ?? {}) as z.ZodRawShape),
+      // Pass the remote JSON schema straight through. Round-tripping it through
+      // Zod (zod-from-json-schema -> zod-to-json-schema under zod v3) silently
+      // drops every property, leaving the connector's tools unusable.
+      inputSchema: jsonSchema(
+        t.inputSchema as Parameters<typeof jsonSchema>[0],
+      ),
       execute: async (args: Record<string, unknown>) =>
         session.callTool(name, args),
       toModelOutput: ({ output }: { output: unknown }) =>
@@ -230,18 +239,46 @@ export function buildKlavisToolSet(deps: KlavisToolAdapterDeps): ToolSet {
   return toolSet
 }
 
+// Bridge the locally hand-built Zod shape (the connector tool's schema) into a
+// v2 registerTool input schema. v2 derives a tools/list JSON schema from the
+// JSON Schema, so convert the object first, then wrap it. Remote Strata tools do
+// NOT use this path: their JSON schema goes straight to fromJsonSchema.
+function toV2InputSchema(rawShape: z.ZodRawShape) {
+  // The bridged value is a StandardSchemaWithJSON; type it as a raw shape so
+  // registerTool's overload and handler typing resolve as before. At runtime
+  // v2 accepts the real object via the Standard Schema path. Use Zod's native
+  // JSON Schema converter: the object is a Zod 4 schema, which the external
+  // zod-to-json-schema (v3-only) silently converts to an empty schema.
+  return fromJsonSchema(
+    z.toJSONSchema(z.object(rawShape)) as never,
+  ) as unknown as Record<string, never>
+}
+
+// Wrap a remote Strata tool's JSON schema for v2 registerTool without any Zod
+// round-trip. Same cast rationale as toV2InputSchema: the typed overload wants a
+// raw shape, while the StandardSchemaWithJSON flows through at runtime.
+function remoteJsonInputSchema(schema: Parameters<typeof fromJsonSchema>[0]) {
+  return fromJsonSchema(schema) as unknown as Record<string, never>
+}
+
 export function registerKlavisTools(
   mcpServer: McpServer,
   deps: KlavisToolAdapterDeps,
+  options: KlavisMcpRegistrationOptions = {},
 ): void {
   mcpServer.registerTool(
     'connector_mcp_servers',
     {
       description:
         'Check or list BrowserOS managed app connectors before using Strata MCP tools. Omit server_name to see available, selected, connected, and proxy status. With server_name, returns connected/auth URL status.',
-      inputSchema: connectorInputSchema(deps.catalog),
+      inputSchema: toV2InputSchema(
+        connectorInputSchema(deps.catalog) as z.ZodRawShape,
+      ),
     },
     async (args: Record<string, unknown>) => {
+      const rejection = rejectUnauthorizedMcpCall(options)
+      if (rejection) return rejection
+
       const startTime = performance.now()
       const selectedServers = selectedServerNames(deps.scope)
       const logBase = {
@@ -316,15 +353,21 @@ export function registerKlavisTools(
 
   const selectedServers = selectedServerNames(deps.scope)
   for (const strataTool of session.tools) {
-    const inputSchema = session.inputSchemas.get(strataTool.name)
-
     mcpServer.registerTool(
       strataTool.name,
       {
         description: strataTool.description,
-        inputSchema,
+        // Pass the remote JSON schema straight through. The old Zod round-trip
+        // dropped every property (zod v3 + zod-from-json-schema), so registerTool
+        // advertised an empty schema that rejected all arguments.
+        inputSchema: remoteJsonInputSchema(
+          strataTool.inputSchema as Parameters<typeof fromJsonSchema>[0],
+        ),
       },
       async (args: Record<string, unknown>) => {
+        const rejection = rejectUnauthorizedMcpCall(options)
+        if (rejection) return rejection
+
         const startTime = performance.now()
         const logBase = {
           toolName: strataTool.name,
@@ -395,4 +438,14 @@ export function registerKlavisTools(
     selectedServers,
     selectedServerCount: selectedServers.length,
   })
+}
+
+/** Keeps connector handlers behind the same lease as browser-tool handlers. */
+function rejectUnauthorizedMcpCall(options: KlavisMcpRegistrationOptions) {
+  const message = options.authorizeCall?.()
+  if (!message) return undefined
+  return {
+    content: [{ type: 'text' as const, text: message }],
+    isError: true,
+  }
 }

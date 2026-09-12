@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { AppSelector } from '@/components/elements/AppSelector'
@@ -28,19 +29,12 @@ import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { type StagedAttachment, stageAttachments } from '@/lib/attachments'
-import { Feature } from '@/lib/browseros/capabilities'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { cn } from '@/lib/utils'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
-import { useVoiceInput } from '@/modules/voice/voice.hooks'
 import { useWorkspace } from '@/modules/workspace/workspace.hooks'
-import {
-  ConversationVoiceControls,
-  resolveVoicePresentation,
-} from './ConversationVoiceControls'
 
 export interface ConversationInputSendInput {
   text: string
@@ -64,18 +58,11 @@ export interface ConversationInputProps {
   attachmentsEnabled?: boolean
   variant?: 'home' | 'conversation'
   /**
-   * When set, a Stop button surfaces to the left of the voice mic
-   * while `streaming === true`. Click cancels the active turn
-   * server-side via the chat-cancel endpoint. Absent → no Stop
-   * button (legacy behaviour for the home composer).
+   * When set, a Stop button surfaces while streaming. Click cancels the
+   * active turn server-side via the chat-cancel endpoint. The home
+   * composer omits this callback and has no Stop button.
    */
   onStop?: () => void
-  /**
-   * When set, a voice-mode entry button surfaces next to the dictation
-   * mic. Home uses this to hand off to the chat surface where the full
-   * voice-loop overlay lives. Absent → button hidden.
-   */
-  onOpenVoiceMode?: () => void
 }
 
 function InputActionButton({
@@ -318,7 +305,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   attachmentsEnabled = true,
   variant = 'conversation',
   onStop,
-  onOpenVoiceMode,
 }) => {
   const [input, setInput] = useState('')
   const [selectedTabs, setSelectedTabs] = useState<chrome.tabs.Tab[]>([])
@@ -328,15 +314,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
   const [isStaging, setIsStaging] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const voice = useVoiceInput()
-  const { supports } = useCapabilities()
-  const supportsVoiceInput = supports(Feature.VOICE_INPUT_SUPPORT)
-  const voicePresentation = resolveVoicePresentation({
-    enabled: supportsVoiceInput,
-    isRecording: voice.isRecording,
-    isTranscribing: voice.isTranscribing,
-    error: voice.error,
-  })
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isConversation = variant === 'conversation'
 
@@ -379,22 +356,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
       element.scrollHeight > maxHeight ? 'auto' : 'hidden'
     setIsExpandedDraft(nextHeight > collapsedHeight)
   })
-
-  useEffect(() => {
-    if (
-      supportsVoiceInput &&
-      voice.transcript &&
-      !voicePresentation.isTranscribing
-    ) {
-      setInput(voice.transcript)
-      voice.clearTranscript()
-    }
-  }, [
-    supportsVoiceInput,
-    voice.transcript,
-    voicePresentation.isTranscribing,
-    voice,
-  ])
 
   useEffect(() => {
     if (attachmentsEnabled) return
@@ -523,7 +484,7 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             isExpandedDraft ? 'items-end' : 'items-center',
           )}
         >
-          <BotInputIcon variant={variant} />
+          <BotInputIcon provider={selectedProvider} />
           <div className="flex-1">
             <Textarea
               ref={textareaRef}
@@ -538,12 +499,9 @@ export const ConversationInput: FC<ConversationInputProps> = ({
               onPaste={handlePaste}
               rows={1}
               placeholder={
-                voicePresentation.isTranscribing
-                  ? 'Transcribing...'
-                  : (placeholder ??
-                    `Message ${selectedProvider?.name ?? 'agent'}...`)
+                placeholder ?? `Message ${selectedProvider?.name ?? 'agent'}...`
               }
-              disabled={disabled || voicePresentation.isTranscribing}
+              disabled={disabled}
               className={cn(
                 'resize-none border-none bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 dark:bg-transparent',
                 '[field-sizing:fixed]',
@@ -555,25 +513,11 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             />
           </div>
           {streaming && onStop ? <StopButton onStop={onStop} /> : null}
-          <ConversationVoiceControls
-            enabled={supportsVoiceInput}
-            isRecording={voice.isRecording}
-            isTranscribing={voice.isTranscribing}
-            onStartRecording={() => {
-              void voice.startRecording()
-            }}
-            onStopRecording={() => {
-              void voice.stopRecording()
-            }}
-            onOpenVoiceMode={onOpenVoiceMode}
-          />
           <InputActionButton
             disabled={
               !hasContent ||
               isStaging ||
               !!disabled ||
-              voicePresentation.isRecording ||
-              voicePresentation.isTranscribing ||
               (streaming && !queueAware)
             }
             onClick={handleSend}
@@ -583,11 +527,6 @@ export const ConversationInput: FC<ConversationInputProps> = ({
             hasContent={hasContent}
           />
         </div>
-        {voicePresentation.error ? (
-          <div className="px-5 pb-2 text-destructive text-xs">
-            {voicePresentation.error}
-          </div>
-        ) : null}
         <CalmContextControls
           providers={providers}
           selectedProvider={selectedProvider}
@@ -680,23 +619,29 @@ function AttachmentChip({
   )
 }
 
-function BotInputIcon({ variant }: { variant: 'home' | 'conversation' }) {
+function BotInputIcon({ provider }: { provider?: Provider | null }) {
+  const AcpMark =
+    provider?.kind === 'acp' ? BRAND_MARKS[provider.brandKey ?? ''] : undefined
   return (
-    <div
-      className={cn(
-        'flex items-center justify-center text-[var(--accent-orange)]',
-        variant === 'home'
-          ? 'h-8 w-8 rounded-lg bg-[var(--accent-orange)]/10'
-          : 'h-8 w-8 rounded-lg bg-[var(--accent-orange)]/10',
+    <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
+      {AcpMark ? (
+        <AcpMark className="h-5 w-5" />
+      ) : provider?.type === 'browseros' ? (
+        <BrowserOSIcon size={18} />
+      ) : provider && provider.kind === 'llm' ? (
+        <ProviderIcon type={provider.type as ProviderType} size={18} />
+      ) : (
+        <Bot className="h-4 w-4" />
       )}
-    >
-      <Bot className="h-4 w-4" />
     </div>
   )
 }
 
 function TargetPillIcon({ provider }: { provider: Provider }) {
-  if (provider.kind === 'acp') return <Bot className="size-3" />
+  if (provider.kind === 'acp') {
+    const Mark = BRAND_MARKS[provider.brandKey ?? '']
+    return Mark ? <Mark className="size-3" /> : <Bot className="size-3" />
+  }
   if (provider.type === 'browseros') return <BrowserOSIcon size={12} />
   return <ProviderIcon type={provider.type as ProviderType} size={12} />
 }

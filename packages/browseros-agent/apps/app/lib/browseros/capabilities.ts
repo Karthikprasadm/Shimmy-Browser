@@ -12,10 +12,13 @@ type FeatureConfig = {
   requiresDevelopmentFlag?: boolean
 }
 
+// Voice input was removed because its bundled VAD/ONNX assets made startup
+// unpacking too slow. Its UI, recording code, dependencies, and assets were
+// removed together.
 export enum Feature {
   ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
-  VOICE_INPUT_SUPPORT = 'VOICE_INPUT_SUPPORT',
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
+  NEWTAB_CHAT_HISTORY_SUPPORT = 'NEWTAB_CHAT_HISTORY_SUPPORT',
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
   GITHUB_COPILOT_SUPPORT = 'GITHUB_COPILOT_SUPPORT',
@@ -26,8 +29,8 @@ export enum Feature {
 
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
-  [Feature.VOICE_INPUT_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
+  [Feature.NEWTAB_CHAT_HISTORY_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },

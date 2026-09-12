@@ -1,210 +1,164 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
+import { createQuery } from 'react-query-kit'
 import {
   resolveDefaultProviderId,
   resolveSelectedProvider,
-} from '../../lib/llm-providers/provider-selection'
+} from '@/lib/llm-providers/provider-selection'
+import { DEFAULT_PROVIDER_ID } from '@/lib/llm-providers/storage'
+import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
-  createDefaultProvidersConfig,
-  DEFAULT_PROVIDER_ID,
-  defaultProviderIdStorage,
-  loadProviders,
-  providersStorage,
-} from '../../lib/llm-providers/storage'
+  deleteProvider as deleteProviderRow,
+  fetchDefaultProviderId,
+  fetchProviders,
+  putDefaultProvider,
+  putProvider,
+} from './llm-providers.api'
+import { planProviderSave } from './llm-providers.helpers'
+import { watchProviderRevision } from './llm-providers.revision'
 
 export interface UseLlmProvidersReturn {
   providers: LlmProviderConfig[]
   defaultProviderId: string
   selectedProvider: LlmProviderConfig | null
   isLoading: boolean
-  saveProvider: (provider: LlmProviderConfig) => Promise<void>
+  /**
+   * The server could not be reached, as opposed to reporting no providers.
+   * Callers must not treat this as an empty list: the difference is between
+   * offering to set up a first provider and saying the list is unavailable.
+   */
+  isUnavailable: boolean
+  /**
+   * Resolves with the row that was actually written. A single-instance save
+   * keeps the existing provider's id, so the caller must not assume the id it
+   * passed in is the one that persisted.
+   */
+  saveProvider: (provider: LlmProviderConfig) => Promise<LlmProviderConfig>
   setDefaultProvider: (providerId: string) => Promise<void>
   deleteProvider: (providerId: string) => Promise<void>
 }
 
-const SINGLE_INSTANCE_PROVIDER_TYPES = new Set<LlmProviderConfig['type']>([
-  'chatgpt-pro',
-  'github-copilot',
-  'qwen-code',
-])
+export const useProvidersQuery = createQuery<LlmProviderConfig[]>({
+  queryKey: ['llm-providers'],
+  fetcher: fetchProviders,
+})
+
+/**
+ * The selected provider, held on the server beside the providers it points at.
+ *
+ * It lived in extension storage until the two provider tables were merged,
+ * which meant it could only ever name an llm provider: selecting an acp agent
+ * wrote the other pointer and left this one stale.
+ */
+export const useDefaultProviderIdQuery = createQuery<string | null>({
+  queryKey: ['provider-default'],
+  fetcher: fetchDefaultProviderId,
+})
 
 /** Persists the configured default provider id used by provider selection. */
-// Exported only for llm-providers.hooks.test.ts; fallow's graph skips test imports.
-// fallow-ignore-next-line unused-export
 export async function persistDefaultProviderId(
   providerId: string,
 ): Promise<void> {
-  await defaultProviderIdStorage.setValue(providerId)
+  await putDefaultProvider(providerId)
 }
 
-/** Applies provider-save semantics before writing the full provider list. */
-export function upsertProviderConfig(
-  currentProviders: LlmProviderConfig[],
-  provider: LlmProviderConfig,
-  now = Date.now(),
-): LlmProviderConfig[] {
-  if (SINGLE_INSTANCE_PROVIDER_TYPES.has(provider.type)) {
-    return upsertSingleInstanceProvider(currentProviders, provider, now)
-  }
+/**
+ * Keeps this surface current with provider writes made in another one.
+ *
+ * Each extension surface has its own query cache, and the rows live on the
+ * server where nothing can watch them. Writers bump a revision in extension
+ * storage instead, which does broadcast to every context, and each mounted
+ * view refetches. This is what `providersStorage.watch` used to do before the
+ * list moved off extension storage.
+ */
+function useProviderRevision(): void {
+  const queryClient = useQueryClient()
 
-  const existingIndex = currentProviders.findIndex(
-    (candidate) => candidate.id === provider.id,
+  useEffect(
+    () =>
+      watchProviderRevision(() => {
+        queryClient.invalidateQueries({ queryKey: useProvidersQuery.getKey() })
+        queryClient.invalidateQueries({
+          queryKey: useDefaultProviderIdQuery.getKey(),
+        })
+      }),
+    [queryClient],
   )
-  if (existingIndex >= 0) {
-    const updatedProviders = [...currentProviders]
-    updatedProviders[existingIndex] = { ...provider, updatedAt: now }
-    return updatedProviders
-  }
-
-  return [
-    ...currentProviders,
-    {
-      ...provider,
-      createdAt: now,
-      updatedAt: now,
-    },
-  ]
-}
-
-function upsertSingleInstanceProvider(
-  currentProviders: LlmProviderConfig[],
-  provider: LlmProviderConfig,
-  now: number,
-): LlmProviderConfig[] {
-  const existing =
-    currentProviders.find((candidate) => candidate.id === provider.id) ??
-    currentProviders.find((candidate) => candidate.type === provider.type)
-  const savedProvider = {
-    ...provider,
-    id: existing?.id ?? provider.id,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  }
-  let inserted = false
-
-  const updatedProviders = currentProviders.flatMap((candidate) => {
-    if (candidate.id === savedProvider.id) {
-      if (inserted) return []
-      inserted = true
-      return [savedProvider]
-    }
-    if (candidate.type === provider.type || candidate.id === provider.id) {
-      return []
-    }
-    return [candidate]
-  })
-
-  if (!inserted) updatedProviders.push(savedProvider)
-  return updatedProviders
 }
 
 /** Hook for managing LLM provider configurations. */
 export function useLlmProviders(): UseLlmProvidersReturn {
-  const [providers, setProviders] = useState<LlmProviderConfig[]>([])
-  const [defaultProviderId, setDefaultProviderId] =
-    useState<string>(DEFAULT_PROVIDER_ID)
-  const [isLoading, setIsLoading] = useState(true)
+  const queryClient = useQueryClient()
+  const providersQuery = useProvidersQuery()
+  const defaultQuery = useDefaultProviderIdQuery()
+  useProviderRevision()
+  const storedDefaultId = defaultQuery.data ?? DEFAULT_PROVIDER_ID
 
-  useEffect(() => {
-    const loadData = async () => {
-      setIsLoading(true)
-      try {
-        let [loadedProviders, loadedDefaultId] = await Promise.all([
-          loadProviders(),
-          defaultProviderIdStorage.getValue(),
-        ])
-
-        if (!loadedProviders || loadedProviders.length === 0) {
-          loadedProviders = createDefaultProvidersConfig()
-          await providersStorage.setValue(loadedProviders)
-        }
-
-        const resolvedDefaultId = resolveDefaultProviderId(
-          loadedProviders,
-          loadedDefaultId,
-        )
-        if (resolvedDefaultId !== loadedDefaultId) {
-          await defaultProviderIdStorage.setValue(resolvedDefaultId)
-        }
-
-        setProviders(loadedProviders)
-        setDefaultProviderId(resolvedDefaultId)
-      } catch {
-        const fallback = createDefaultProvidersConfig()
-        setProviders(fallback)
-        setDefaultProviderId(DEFAULT_PROVIDER_ID)
-        await providersStorage.setValue(fallback).catch(() => {})
-        await defaultProviderIdStorage
-          .setValue(DEFAULT_PROVIDER_ID)
-          .catch(() => {})
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    loadData()
-  }, [])
-
-  useEffect(() => {
-    const unsubscribeProviders = providersStorage.watch((newProviders) => {
-      if (newProviders) {
-        setProviders(newProviders)
-      }
+  const providers = providersQuery.data ?? []
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: useProvidersQuery.getKey() })
+  const invalidateDefault = () =>
+    queryClient.invalidateQueries({
+      queryKey: useDefaultProviderIdQuery.getKey(),
     })
 
-    const unsubscribeDefaultId = defaultProviderIdStorage.watch(
-      (newDefaultId) => {
-        if (newDefaultId) {
-          setDefaultProviderId(newDefaultId)
-        }
-      },
-    )
+  const saveMutation = useMutation({
+    mutationFn: async (provider: LlmProviderConfig) => {
+      const { saved, removedIds } = planProviderSave(providers, provider)
+      await putProvider(saved)
+      for (const id of removedIds) await deleteProviderRow(id)
+      // The row that persisted, which is not always the one passed in: a
+      // single-instance save keeps the earlier provider's id, and that is the
+      // id chat target selection has to reference.
+      return saved
+    },
+    onSuccess: invalidate,
+  })
 
-    return () => {
-      unsubscribeProviders()
-      unsubscribeDefaultId()
-    }
-  }, [])
+  const deleteMutation = useMutation({
+    mutationFn: async (providerId: string) => {
+      // The built-in provider is what the app falls back to, so removing it
+      // would leave nothing to chat with.
+      if (providerId === DEFAULT_PROVIDER_ID) return
 
-  const saveProvider = async (provider: LlmProviderConfig) => {
-    const currentProviders = (await providersStorage.getValue()) || []
-    const updatedProviders = upsertProviderConfig(currentProviders, provider)
-    await providersStorage.setValue(updatedProviders)
+      // Delete first. Moving the default before the row is gone leaves the
+      // provider configured but no longer default when the delete fails, with
+      // nothing to tell the user it happened. The reverse is harmless: a
+      // default id pointing at a deleted provider is repaired on read.
+      await deleteProviderRow(providerId)
+
+      // Nothing to repoint by hand: deleting the row removes the default with
+      // it, and the next provider is chosen on read.
+    },
+    onSuccess: () => {
+      invalidate()
+      invalidateDefault()
+    },
+  })
+
+  const setDefaultMutation = useMutation({
+    mutationFn: persistDefaultProviderId,
+    onSuccess: invalidateDefault,
+  })
+
+  const setDefaultProvider = async (providerId: string) => {
+    await setDefaultMutation.mutateAsync(providerId)
   }
 
-  const setDefaultProviderFn = async (providerId: string) => {
-    setDefaultProviderId(providerId)
-    await persistDefaultProviderId(providerId)
-  }
-
-  const deleteProvider = async (providerId: string) => {
-    if (providerId === DEFAULT_PROVIDER_ID) {
-      return
-    }
-
-    const currentProviders = (await providersStorage.getValue()) || []
-    const updatedProviders = currentProviders.filter((p) => p.id !== providerId)
-
-    if (defaultProviderId === providerId) {
-      const newDefaultId = updatedProviders[0]?.id || DEFAULT_PROVIDER_ID
-      await defaultProviderIdStorage.setValue(newDefaultId)
-    }
-
-    await providersStorage.setValue(updatedProviders)
-  }
-
-  const selectedProvider = useMemo(
-    () => resolveSelectedProvider(providers, defaultProviderId),
-    [providers, defaultProviderId],
-  )
+  // Derived on read rather than repaired in storage: the write would be a side
+  // effect of rendering, and every reader resolves the id the same way anyway.
+  const defaultProviderId = resolveDefaultProviderId(providers, storedDefaultId)
 
   return {
     providers,
     defaultProviderId,
-    selectedProvider,
-    isLoading,
-    saveProvider,
-    setDefaultProvider: setDefaultProviderFn,
-    deleteProvider,
+    selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
+    isLoading: providersQuery.isPending || defaultQuery.isPending,
+    isUnavailable: providersQuery.isError || defaultQuery.isError,
+    saveProvider: (provider) => saveMutation.mutateAsync(provider),
+    setDefaultProvider,
+    deleteProvider: async (providerId) => {
+      await deleteMutation.mutateAsync(providerId)
+    },
   }
 }

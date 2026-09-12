@@ -2,7 +2,9 @@
 //!
 //! Producers can select one of these opaque definitions, but cannot construct a
 //! new wire event or widen its property schema. Free-form input is reduced to
-//! fixed tokens here before the delivery service ever sees it.
+//! fixed tokens here before the delivery service ever sees it. The sole
+//! exception is the agent-declared `task_summary`, a free-text property that is
+//! PII-scrubbed and length-capped upstream and only bounded defensively here.
 
 use serde_json::{Map, Value};
 use std::{
@@ -11,6 +13,8 @@ use std::{
 };
 
 const CLIENT_NAME: &str = "client_name";
+const TASK_CATEGORY: &str = "task_category";
+const TASK_SUMMARY: &str = "task_summary";
 const HARNESS: &str = "harness";
 const KIND: &str = "kind";
 const TOOL_NAME: &str = "tool_name";
@@ -32,6 +36,11 @@ const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// Hard cap on the free-text task summary before it leaves the machine. The
+/// summary is already PII-scrubbed and length-capped upstream; this is the
+/// final defensive bound at the analytics boundary.
+pub(crate) const TASK_SUMMARY_MAX_CHARS: usize = 200;
 
 const KNOWN_CLIENTS: [&str; 15] = [
     "claude-desktop",
@@ -58,6 +67,8 @@ const CLIENT_ALIASES: [(&str, &str); 4] = [
     ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
 ];
 
+const UNRECOGNIZED_EMPTY: &str = "unrecognized-empty";
+
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
     "Claude Code",
     "Codex",
@@ -70,9 +81,29 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 
 pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
 
+/// Fixed set of task kinds the agent may declare. Only these tokens leave the
+/// machine; the free-form session name never does. An unrecognized value is
+/// coerced to `other` rather than dropped, so the declaration still counts and a
+/// hot `other` signals a missing row.
+pub(crate) const TASK_CATEGORY_VALUES: [&str; 11] = [
+    "shopping",
+    "research",
+    "email-and-messaging",
+    "form-filling",
+    "data-extraction",
+    "testing-and-qa",
+    "dev-tools",
+    "social-media",
+    "finance-and-admin",
+    "internal-tools",
+    "other",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PropertyKind {
     ClientName,
+    TaskCategory,
+    TaskSummary,
     Harness,
     EndKind,
     ToolName,
@@ -84,16 +115,49 @@ enum PropertyKind {
 struct PropertyDefinition {
     name: &'static str,
     kind: PropertyKind,
+    /// When true, the event still validates and sends if this property is
+    /// absent; when present it must still normalize.
+    optional: bool,
 }
 
 impl PropertyDefinition {
     const fn new(name: &'static str, kind: PropertyKind) -> Self {
-        Self { name, kind }
+        Self {
+            name,
+            kind,
+            optional: false,
+        }
+    }
+
+    const fn optional(name: &'static str, kind: PropertyKind) -> Self {
+        Self {
+            name,
+            kind,
+            optional: true,
+        }
     }
 
     fn normalize(self, value: &Value) -> Option<Value> {
         match self.kind {
             PropertyKind::ClientName => Some(Value::String(bucket_client_name(value.as_str()?))),
+            PropertyKind::TaskCategory => {
+                let raw = value.as_str()?;
+                let category = if TASK_CATEGORY_VALUES.contains(&raw) {
+                    raw
+                } else {
+                    "other"
+                };
+                Some(Value::String(category.to_string()))
+            }
+            PropertyKind::TaskSummary => {
+                // The one free-text property: the agent-authored summary is already
+                // PII-scrubbed and length-capped upstream; here it is only bounded
+                // defensively and passed through as-is.
+                let raw = value.as_str()?;
+                Some(Value::String(
+                    raw.chars().take(TASK_SUMMARY_MAX_CHARS).collect(),
+                ))
+            }
             PropertyKind::Harness => normalize_token(value, &HARNESS_VALUES),
             PropertyKind::EndKind => normalize_token(value, &END_KIND_VALUES),
             PropertyKind::ToolName => {
@@ -162,8 +226,19 @@ impl EventDefinition {
         let input = properties.as_object()?;
         let mut output = Map::new();
         for property in self.properties {
-            let value = input.get(property.name)?;
-            output.insert(property.name.to_string(), property.normalize(value)?);
+            let Some(value) = input.get(property.name) else {
+                if property.optional {
+                    continue;
+                }
+                return None;
+            };
+            let Some(normalized) = property.normalize(value) else {
+                if property.optional {
+                    continue;
+                }
+                return None;
+            };
+            output.insert(property.name.to_string(), normalized);
         }
         Some(Value::Object(output))
     }
@@ -173,10 +248,11 @@ impl EventDefinition {
         properties: &HashMap<String, Value>,
     ) -> bool {
         self.properties.iter().all(|property| {
-            let Some(current) = properties.get(property.name) else {
-                return false;
-            };
-            property.normalize(current).as_ref() == Some(current)
+            match properties.get(property.name) {
+                Some(current) => property.normalize(current).as_ref() == Some(current),
+                // Absent is acceptable only for optional properties.
+                None => property.optional,
+            }
         })
     }
 
@@ -192,6 +268,14 @@ pub const AGENT_SESSION_STARTED: EventDefinition = EventDefinition::new(
         CLIENT_NAME,
         PropertyKind::ClientName,
     )],
+);
+pub const AGENT_SESSION_TASK_DECLARED: EventDefinition = EventDefinition::new(
+    "agent_session_task_declared",
+    &[
+        PropertyDefinition::new(TASK_CATEGORY, PropertyKind::TaskCategory),
+        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
+        PropertyDefinition::optional(TASK_SUMMARY, PropertyKind::TaskSummary),
+    ],
 );
 pub const AGENT_SESSION_ENDED: EventDefinition = EventDefinition::new(
     "agent_session_ended",
@@ -250,9 +334,10 @@ pub const AGENT_SESSION_EFFICIENCY_COMPUTED: EventDefinition = EventDefinition::
     ],
 );
 
-pub const ALL: [EventDefinition; 7] = [
+pub const ALL: [EventDefinition; 8] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
+    AGENT_SESSION_TASK_DECLARED,
     AGENT_SESSION_ENDED,
     HARNESS_CONNECTED,
     HARNESS_DISCONNECTED,
@@ -300,9 +385,16 @@ fn bucket_client_name(raw: &str) -> String {
     }
 
     if KNOWN_CLIENTS.contains(&slug.as_str()) {
-        slug
+        return slug;
+    }
+
+    // Not allowlisted: record the client's own slug so the long tail is visible
+    // instead of collapsed into one opaque bucket. A blank name has nothing to
+    // record, so it is reported as empty.
+    if slug.is_empty() {
+        UNRECOGNIZED_EMPTY.to_string()
     } else {
-        "unrecognized-client".to_string()
+        slug
     }
 }
 
@@ -313,18 +405,23 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 7);
+        assert_eq!(ALL.len(), 8);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
                 SERVER_STARTED.name(),
                 AGENT_SESSION_STARTED.name(),
+                AGENT_SESSION_TASK_DECLARED.name(),
                 AGENT_SESSION_ENDED.name(),
                 HARNESS_CONNECTED.name(),
                 HARNESS_DISCONNECTED.name(),
                 AGENT_SESSION_TOOL_USAGE.name(),
                 AGENT_SESSION_EFFICIENCY_COMPUTED.name(),
             ]
+        );
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED.property_names(),
+            vec!["task_category", "client_name", "task_summary"]
         );
         assert_eq!(
             AGENT_SESSION_ENDED.property_names(),
@@ -432,21 +529,98 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_content_shaped_client_names_become_unrecognized_client() {
-        for raw in [
-            "",
-            "my-secret-internal-tool",
-            "https://example.com",
-            "user@example.com",
-            "/home/user/secret",
-            r"C:\Users\someone",
-            "codex@example.com",
-            "codex://private",
-            "/codex/home/user",
+    fn blank_client_names_report_as_unrecognized_empty() {
+        for raw in ["", "   ", "!!!", "…"] {
+            assert_eq!(
+                AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
+                Some(json!({ "client_name": "unrecognized-empty" })),
+                "{raw:?} should bucket as empty"
+            );
+        }
+    }
+
+    #[test]
+    fn known_task_categories_pass_through_and_unknown_coerces_to_other() {
+        for category in TASK_CATEGORY_VALUES {
+            assert_eq!(
+                AGENT_SESSION_TASK_DECLARED
+                    .sanitize(&json!({ "task_category": category, "client_name": "cursor" })),
+                Some(json!({ "task_category": category, "client_name": "cursor" }))
+            );
+        }
+        // Anything off-enum is coerced to `other` so the declaration still counts.
+        for raw in ["crypto-trading", "", "SHOPPING", "shopping ", "acme corp"] {
+            assert_eq!(
+                AGENT_SESSION_TASK_DECLARED
+                    .sanitize(&json!({ "task_category": raw, "client_name": "codex" })),
+                Some(json!({ "task_category": "other", "client_name": "codex" }))
+            );
+        }
+    }
+
+    #[test]
+    fn task_declared_drops_when_category_is_not_a_string() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED
+                .sanitize(&json!({ "task_category": 7, "client_name": "cursor" })),
+            None
+        );
+    }
+
+    #[test]
+    fn task_declared_passes_through_the_free_text_summary() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED.sanitize(&json!({
+                "task_category": "shopping",
+                "client_name": "cursor",
+                "task_summary": "Compared warranty terms across three retailers.",
+            })),
+            Some(json!({
+                "task_category": "shopping",
+                "client_name": "cursor",
+                "task_summary": "Compared warranty terms across three retailers.",
+            }))
+        );
+    }
+
+    #[test]
+    fn task_declared_still_sends_when_the_optional_summary_is_absent() {
+        assert_eq!(
+            AGENT_SESSION_TASK_DECLARED
+                .sanitize(&json!({ "task_category": "research", "client_name": "codex" })),
+            Some(json!({ "task_category": "research", "client_name": "codex" }))
+        );
+    }
+
+    #[test]
+    fn task_summary_is_capped_at_the_boundary() {
+        let long = "x".repeat(TASK_SUMMARY_MAX_CHARS + 50);
+        let sanitized = AGENT_SESSION_TASK_DECLARED.sanitize(&json!({
+            "task_category": "other",
+            "client_name": "codex",
+            "task_summary": long,
+        }));
+        let summary = sanitized
+            .as_ref()
+            .and_then(|value| value.get("task_summary"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(summary.chars().count(), TASK_SUMMARY_MAX_CHARS);
+    }
+
+    #[test]
+    fn unlisted_client_names_surface_their_slug() {
+        for (raw, expected) in [
+            ("Roo Code", "roo-code"),
+            ("LibreChat", "librechat"),
+            ("5ire", "5ire"),
+            ("Cherry Studio", "cherry-studio"),
+            ("claude-code-router", "claude-code-router"),
         ] {
             assert_eq!(
                 AGENT_SESSION_STARTED.sanitize(&json!({ "client_name": raw })),
-                Some(json!({ "client_name": "unrecognized-client" }))
+                Some(json!({ "client_name": expected })),
+                "{raw:?} should surface its slug"
             );
         }
     }

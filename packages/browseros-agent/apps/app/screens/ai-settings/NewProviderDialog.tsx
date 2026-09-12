@@ -73,7 +73,14 @@ import {
   getIncompleteCatalogHint,
   getModelPickerRows,
 } from './model-picker.helpers'
-import { getModelContextLength, getModelsForProvider } from './models'
+import {
+  getModelContextLength,
+  getModelsForProvider,
+  getReasoningEffortOptions,
+  type ModelInfo,
+  modelSupportsReasoning,
+} from './models'
+import { ProviderHeadersFields } from './ProviderHeadersFields'
 import {
   isCredentiallessProviderType,
   isLocalRuntimeProviderType,
@@ -85,8 +92,50 @@ import {
 /** Window assumed for any model the bundled catalog cannot size. */
 const DEFAULT_CONTEXT_WINDOW = 128000
 
+/**
+ * Shown on a credential field when editing a provider that already has one
+ * stored. Reads never return the secret, and the server keeps the stored value
+ * when the field is submitted blank, so editing does not require re-entering it.
+ */
+const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
+
+// Managed-auth providers (OAuth + BrowserOS-hosted) drop custom headers
+// server-side, so the editor is hidden for them rather than letting users save
+// headers that would be silently ignored. Keep in sync with the provider
+// factories that omit config.headers.
+const HEADERLESS_PROVIDER_TYPES = new Set<string>([
+  'browseros',
+  'chatgpt-pro',
+  'github-copilot',
+  'qwen-code',
+])
+
+function headerEntries(headers: LlmProviderConfig['headers']) {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }))
+}
+
 function defaultReasoningEffort(type?: ProviderType) {
   return type === 'chatgpt-pro' ? 'medium' : 'high'
+}
+
+/**
+ * Valid temperature range by provider. models.dev only says whether temperature
+ * is supported, not its range, so this encodes the provider-level limits.
+ * Anthropic caps at 1.0 (the SDK clamps anything higher); most others accept 0-2.
+ */
+function getTemperatureRange(type?: ProviderType): {
+  min: number
+  max: number
+} {
+  if (type === 'anthropic') return { min: 0, max: 1 }
+  return { min: 0, max: 2 }
+}
+
+/** Picks a sensible default effort from a model's allowed levels. */
+function pickDefaultEffort(options: string[]): string {
+  if (options.includes('medium')) return 'medium'
+  if (options.includes('high')) return 'high'
+  return options[Math.floor(options.length / 2)] ?? 'medium'
 }
 
 function formatContextWindow(tokens: number): string {
@@ -129,8 +178,28 @@ function isProviderTestable(input: {
   accessKeyId?: string
   secretAccessKey?: string
   region?: string
+  /**
+   * Credentials already held by the server for this provider. Reads do not
+   * return the values, so editing one leaves the fields blank; a stored
+   * credential satisfies the requirement exactly as a typed one does, and
+   * leaving it blank keeps what is stored.
+   */
+  stored?: {
+    hasApiKey?: boolean
+    hasAccessKeyId?: boolean
+    hasSecretAccessKey?: boolean
+    hasSessionToken?: boolean
+  }
 }): boolean {
   if (!input.modelId) return false
+
+  const hasApiKey = Boolean(input.apiKey || input.stored?.hasApiKey)
+  const hasAccessKeyId = Boolean(
+    input.accessKeyId || input.stored?.hasAccessKeyId,
+  )
+  const hasSecretAccessKey = Boolean(
+    input.secretAccessKey || input.stored?.hasSecretAccessKey,
+  )
 
   if (
     input.type === 'chatgpt-pro' ||
@@ -141,13 +210,13 @@ function isProviderTestable(input: {
   }
 
   if (input.type === 'azure') {
-    return Boolean((input.resourceName || input.baseUrl) && input.apiKey)
+    return Boolean((input.resourceName || input.baseUrl) && hasApiKey)
   }
   if (input.type === 'bedrock') {
-    return Boolean(input.accessKeyId && input.secretAccessKey && input.region)
+    return Boolean(hasAccessKeyId && hasSecretAccessKey && input.region)
   }
   if (!input.baseUrl) return false
-  if (!['ollama', 'lmstudio'].includes(input.type) && !input.apiKey) {
+  if (!['ollama', 'lmstudio'].includes(input.type) && !hasApiKey) {
     return false
   }
   return true
@@ -185,6 +254,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         initialValues?.baseUrl || getDefaultBaseUrlForProviders('openai'),
       modelId: initialValues?.modelId || '',
       apiKey: initialValues?.apiKey || '',
+      headers: headerEntries(initialValues?.headers),
       supportsImages: initialValues?.supportsImages ?? false,
       contextWindow: initialValues?.contextWindow || DEFAULT_CONTEXT_WINDOW,
       temperature: initialValues?.temperature ?? 0.2,
@@ -193,6 +263,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       secretAccessKey: initialValues?.secretAccessKey || '',
       region: initialValues?.region || '',
       sessionToken: initialValues?.sessionToken || '',
+      hasApiKey: initialValues?.hasApiKey ?? false,
+      hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
+      hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
+      originalType: initialValues?.type,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -203,6 +277,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedType = form.watch('type')
   const watchedModelId = form.watch('modelId')
 
+  const watchedHeaders = form.watch('headers')
   const watchedApiKey = form.watch('apiKey')
   const watchedBaseUrl = form.watch('baseUrl')
   const watchedResourceName = form.watch('resourceName')
@@ -210,6 +285,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const watchedSecretAccessKey = form.watch('secretAccessKey')
   const watchedRegion = form.watch('region')
   const watchedSessionToken = form.watch('sessionToken')
+
+  // Editing a provider that already has a credential stored: the field is
+  // optional (blank keeps the saved value), so drop the required marker and the
+  // "enter a key" placeholder that make a saved credential read as missing. The
+  // stored credential only applies while the type is unchanged; switching the
+  // provider type re-requires the new type's own credential.
+  const typeUnchanged = watchedType === initialValues?.type
+  const savedApiKey = Boolean(initialValues?.hasApiKey) && typeUnchanged
+  const savedAccessKeyId =
+    Boolean(initialValues?.hasAccessKeyId) && typeUnchanged
+  const savedSecretAccessKey =
+    Boolean(initialValues?.hasSecretAccessKey) && typeUnchanged
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - clear result when any credential changes
   useEffect(() => {
@@ -224,9 +311,45 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     watchedSecretAccessKey,
     watchedRegion,
     watchedSessionToken,
+    watchedHeaders,
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
+  const selectedModel: ModelInfo | undefined = modelInfoList.find(
+    (m) => m.modelId === watchedModelId,
+  )
+  const showReasoning = modelSupportsReasoning(
+    selectedModel,
+    watchedType as ProviderType,
+  )
+  const reasoningEffortOptions = getReasoningEffortOptions(selectedModel)
+  const temperatureDisabled = selectedModel?.supportsTemperature === false
+  const temperatureRange = getTemperatureRange(watchedType as ProviderType)
+
+  // Context window guardrails for catalog models with a known window.
+  const modelDefaultContext = selectedModel?.contextLength
+  const watchedContextWindow = form.watch('contextWindow')
+  const contextIsCustom =
+    modelDefaultContext !== undefined &&
+    watchedContextWindow !== modelDefaultContext
+  const contextExceedsMax =
+    modelDefaultContext !== undefined &&
+    typeof watchedContextWindow === 'number' &&
+    watchedContextWindow > modelDefaultContext
+  const resetContextWindow = () => {
+    if (modelDefaultContext !== undefined) {
+      form.setValue('contextWindow', modelDefaultContext)
+    }
+  }
+  const resetContextLink = (
+    <button
+      type="button"
+      onClick={resetContextWindow}
+      className="cursor-pointer text-primary hover:underline"
+    >
+      Reset
+    </button>
+  )
 
   const modelFuse = useMemo(
     () =>
@@ -246,6 +369,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   const commitModelId = (modelId: string, contextLength?: number) => {
     form.setValue('modelId', modelId)
+    const info = modelInfoList.find((m) => m.modelId === modelId)
+    if (info?.supportsImages !== undefined) {
+      form.setValue('supportsImages', info.supportsImages)
+    }
+    // Reset effort to a level this model actually supports.
+    form.setValue(
+      'reasoningEffort',
+      pickDefaultEffort(getReasoningEffortOptions(info)),
+    )
     track(MODEL_SELECTED_EVENT, {
       provider_type: watchedType,
       model_id: modelId,
@@ -299,6 +431,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           getDefaultBaseUrlForProviders(initialValues.type || 'openai'),
         modelId: initialValues.modelId || '',
         apiKey: initialValues.apiKey || '',
+        headers: headerEntries(initialValues.headers),
         supportsImages: initialValues.supportsImages ?? false,
         contextWindow: initialValues.contextWindow || DEFAULT_CONTEXT_WINDOW,
         temperature: initialValues.temperature ?? 0.2,
@@ -307,6 +440,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: initialValues.secretAccessKey || '',
         region: initialValues.region || '',
         sessionToken: initialValues.sessionToken || '',
+        hasApiKey: initialValues.hasApiKey ?? false,
+        hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
+        hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
+        originalType: initialValues.type,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -324,6 +461,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         baseUrl: getDefaultBaseUrlForProviders(defaultType),
         modelId: '',
         apiKey: '',
+        headers: [],
         supportsImages: false,
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         temperature: 0.2,
@@ -332,6 +470,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: '',
         region: '',
         sessionToken: '',
+        hasApiKey: false,
+        hasAccessKeyId: false,
+        hasSecretAccessKey: false,
+        originalType: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
@@ -380,9 +522,13 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     accessKeyId: watchedAccessKeyId,
     secretAccessKey: watchedSecretAccessKey,
     region: watchedRegion,
+    // A saved credential only counts while the type is unchanged; after a type
+    // switch the Test needs the new type's own credential entered.
+    stored: typeUnchanged ? initialValues : undefined,
   })
 
   const handleTest = async () => {
+    if (!(await form.trigger('headers'))) return
     if (!agentServerUrl) {
       setTestResult({
         success: false,
@@ -395,14 +541,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     setTestResult(null)
 
     try {
-      const values = form.getValues()
+      const values = normalizeProviderFormValues(form.getValues())
 
       const result = await testProvider(
         {
-          id: 'test',
+          // The real id (when editing) lets the server fill a blank key from
+          // the saved credential; a new provider has no saved row to reuse.
+          id: initialValues?.id ?? 'test',
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
+          headers: values.headers,
           modelId: values.modelId,
           apiKey: values.apiKey,
           supportsImages: values.supportsImages,
@@ -451,6 +600,85 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     if (setupGuideUrl) chrome.tabs.create({ url: setupGuideUrl })
   }
 
+  // Reasoning summaries are an OpenAI-family concept; other providers stream
+  // reasoning text without a separate summary control.
+  const showReasoningSummary =
+    watchedType === 'openai' ||
+    watchedType === 'azure' ||
+    watchedType === 'chatgpt-pro'
+
+  const renderReasoningControls = () => (
+    <div className="space-y-4 border-border border-t pt-4">
+      <h4 className="font-medium text-sm">Reasoning</h4>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField
+          control={form.control}
+          name="reasoningEffort"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Reasoning Effort</FormLabel>
+              <Select
+                onValueChange={field.onChange}
+                value={
+                  reasoningEffortOptions.includes(field.value ?? '')
+                    ? field.value
+                    : pickDefaultEffort(reasoningEffortOptions)
+                }
+              >
+                <FormControl>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {reasoningEffortOptions.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value.charAt(0).toUpperCase() + value.slice(1)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormDescription>
+                How much the model thinks before responding
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {showReasoningSummary && (
+          <FormField
+            control={form.control}
+            name="reasoningSummary"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Reasoning Summary</FormLabel>
+                <Select
+                  onValueChange={field.onChange}
+                  value={field.value || 'auto'}
+                >
+                  <FormControl>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="concise">Concise</SelectItem>
+                    <SelectItem value="detailed">Detailed</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  Detail level of visible thinking steps
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+      </div>
+    </div>
+  )
+
   const renderProviderSpecificFields = () => {
     if (
       isCredentiallessProviderType(watchedType) &&
@@ -466,70 +694,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
     if (watchedType === 'chatgpt-pro') {
       return (
-        <>
-          <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
-            Credentials are managed via OAuth. No API key needed.
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="reasoningEffort"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Reasoning Effort</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value || 'medium'}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      <SelectItem value="low">Low</SelectItem>
-                      <SelectItem value="medium">Medium</SelectItem>
-                      <SelectItem value="high">High</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    How much the model thinks before responding
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="reasoningSummary"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Reasoning Summary</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value || 'auto'}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="concise">Concise</SelectItem>
-                      <SelectItem value="detailed">Detailed</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>
-                    Detail level of visible thinking steps
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </>
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-700 text-sm dark:border-green-800 dark:bg-green-950 dark:text-green-300">
+          Credentials are managed via OAuth. No API key needed.
+        </div>
       )
     }
 
@@ -573,11 +740,15 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             name="apiKey"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>API Key *</FormLabel>
+                <FormLabel>API Key{savedApiKey ? '' : ' *'}</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
-                    placeholder="Enter your Azure API key"
+                    placeholder={
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : 'Enter your Azure API key'
+                    }
                     {...field}
                   />
                 </FormControl>
@@ -598,9 +769,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="accessKeyId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Access Key ID *</FormLabel>
+                  <FormLabel>
+                    Access Key ID{savedAccessKeyId ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
-                    <Input placeholder="AKIA..." {...field} />
+                    <Input
+                      placeholder={
+                        savedAccessKeyId ? KEEP_SAVED_PLACEHOLDER : 'AKIA...'
+                      }
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -611,11 +789,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               name="secretAccessKey"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Secret Access Key *</FormLabel>
+                  <FormLabel>
+                    Secret Access Key{savedSecretAccessKey ? '' : ' *'}
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type="password"
-                      placeholder="Enter your secret access key"
+                      placeholder={
+                        savedSecretAccessKey
+                          ? KEEP_SAVED_PLACEHOLDER
+                          : 'Enter your secret access key'
+                      }
                       {...field}
                     />
                   </FormControl>
@@ -769,6 +953,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   OpenAI Compatible provider template instead.
                 </FormDescription>
               )}
+              {watchedType === 'openai-compatible' && (
+                <FormDescription>
+                  <code>/chat/completions</code> is appended automatically, so
+                  enter only the base URL (e.g.{' '}
+                  <code>https://opencode.ai/zen/go/v1</code>), not the full
+                  endpoint.
+                </FormDescription>
+              )}
               <FormMessage />
             </FormItem>
           )}
@@ -782,14 +974,18 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             )
             return (
               <FormItem>
-                <FormLabel>API Key{isApiKeyOptional ? '' : ' *'}</FormLabel>
+                <FormLabel>
+                  API Key{isApiKeyOptional || savedApiKey ? '' : ' *'}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type="password"
                     placeholder={
-                      isApiKeyOptional
-                        ? 'Enter your API key (optional)'
-                        : 'Enter your API key'
+                      savedApiKey
+                        ? KEEP_SAVED_PLACEHOLDER
+                        : isApiKeyOptional
+                          ? 'Enter your API key (optional)'
+                          : 'Enter your API key'
                     }
                     {...field}
                   />
@@ -897,6 +1093,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                     </FormControl>
                   ) : (
                     <Popover
+                      // modal makes this popover own the scroll lock while open.
+                      // Without it the Dialog's react-remove-scroll blocks wheel
+                      // events over the body-portaled list, so it cannot scroll
+                      // past its max height (only search could reach lower rows).
+                      modal
                       open={modelPickerOpen}
                       onOpenChange={(isOpen) => {
                         setModelPickerOpen(isOpen)
@@ -1005,6 +1206,8 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               )}
             />
 
+            {showReasoning && renderReasoningControls()}
+
             <div className="space-y-4 border-border border-t pt-4">
               <h4 className="font-medium text-sm">Model Configuration</h4>
               <FormField
@@ -1034,15 +1237,30 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                       <FormControl>
                         <Input
                           type="number"
+                          aria-invalid={contextExceedsMax}
                           {...field}
                           onChange={(e) =>
                             field.onChange(Number(e.target.value))
                           }
                         />
                       </FormControl>
-                      <FormDescription>
-                        Auto-filled based on model
-                      </FormDescription>
+                      {contextExceedsMax && (
+                        <p className="text-destructive text-sm">
+                          Context window cannot exceed{' '}
+                          {formatContextWindow(modelDefaultContext ?? 0)}.{' '}
+                          {resetContextLink}
+                        </p>
+                      )}
+                      {!contextExceedsMax && contextIsCustom && (
+                        <FormDescription>
+                          Custom value added. {resetContextLink}
+                        </FormDescription>
+                      )}
+                      {!contextExceedsMax && !contextIsCustom && (
+                        <FormDescription>
+                          Auto-filled based on model
+                        </FormDescription>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1052,13 +1270,17 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   name="temperature"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Temperature (0-2)</FormLabel>
+                      <FormLabel>
+                        Temperature ({temperatureRange.min}-
+                        {temperatureRange.max})
+                      </FormLabel>
                       <FormControl>
                         <Input
                           type="number"
                           step="0.1"
-                          min="0"
-                          max="2"
+                          min={temperatureRange.min}
+                          max={temperatureRange.max}
+                          disabled={temperatureDisabled}
                           {...field}
                           onChange={(e) =>
                             field.onChange(Number(e.target.value))
@@ -1066,7 +1288,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                         />
                       </FormControl>
                       <FormDescription>
-                        Controls response randomness
+                        {temperatureDisabled
+                          ? 'This model does not support temperature'
+                          : 'Controls response randomness'}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -1074,6 +1298,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 />
               </div>
             </div>
+
+            {!HEADERLESS_PROVIDER_TYPES.has(watchedType) && (
+              <ProviderHeadersFields />
+            )}
 
             {testResult && (
               <div
@@ -1114,7 +1342,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 {isTesting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isTesting ? 'Testing...' : 'Test'}
               </Button>
-              <Button type="submit" disabled={isTesting}>
+              <Button type="submit" disabled={isTesting || contextExceedsMax}>
                 {initialValues?.id ? 'Update' : 'Save'}
               </Button>
             </DialogFooter>

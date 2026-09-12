@@ -118,20 +118,24 @@ export const UsagePage: FC = () => {
       </div>
 
       <div className="rounded-xl border border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/5 p-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Zap className="h-5 w-5 text-[var(--accent-orange)]" />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <Zap className="mt-0.5 h-5 w-5 shrink-0 text-[var(--accent-orange)]" />
             <div>
-              <p className="font-semibold text-sm">Want unlimited usage?</p>
-              <p className="text-muted-foreground text-xs">
-                Add your own LLM provider — no credit limits
+              <p className="font-semibold text-sm">
+                Keep going with your own API keys
+              </p>
+              <p className="mt-1 text-muted-foreground text-xs leading-relaxed">
+                The BrowserOS provider is here to help you get started. We
+                recommend adding your own API keys to use BrowserOS without
+                daily credit limits.
               </p>
             </div>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="border-[var(--accent-orange)] bg-[var(--accent-orange)]/10 text-[var(--accent-orange)] hover:bg-[var(--accent-orange)]/20"
+            className="shrink-0 self-start border-[var(--accent-orange)] bg-[var(--accent-orange)]/10 text-[var(--accent-orange)] hover:bg-[var(--accent-orange)]/20 sm:self-auto"
             asChild
           >
             <a href="/app.html#/settings/ai">Add Provider</a>

@@ -191,6 +191,8 @@ export class PageManager {
       background?: boolean
       windowId?: number
       tabGroupId?: string
+      /** Per-call creation handoff, before navigation/load waits. Never global. */
+      onCreated?: (tabId: number) => void
     },
   ): Promise<number> {
     await this.ensureConnected()
@@ -200,6 +202,7 @@ export class PageManager {
       ...(opts?.windowId !== undefined && { windowId: opts.windowId }),
     })
     const tabId = (created.tab as ProtocolTabInfo).tabId
+    opts?.onCreated?.(tabId)
 
     let tab: ProtocolTabInfo | undefined
     for (let attempt = 0; attempt < 30; attempt++) {

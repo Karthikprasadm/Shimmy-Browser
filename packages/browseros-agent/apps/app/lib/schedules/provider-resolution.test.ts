@@ -46,6 +46,15 @@ mock.module('@/lib/llm-providers/storage', () => ({
   },
 }))
 
+// The provider list is a request now, not a storage read. Mocked here so the
+// fetch stub below still sees only the chat call it is asserting on.
+mock.module('@/modules/llm-providers/llm-providers.api', () => ({
+  listProvidersOrNull: async () =>
+    storageValues.has('unreachable')
+      ? null
+      : ((storageValues.get('providers') as LlmProviderConfig[]) ?? []),
+}))
+
 mock.module('@/lib/browseros/helpers', () => ({
   getAgentServerUrl: async () => 'http://127.0.0.1:9105',
   getMcpServerUrl: async () => 'http://127.0.0.1:9106/mcp',
@@ -68,6 +77,22 @@ mock.module('../personalization/personalizationStorage', () => ({
     getValue: async () => 'Use concise output.',
   },
 }))
+
+// Only the refine path still resolves a provider on this side; the scheduled
+// path names an id and lets the server do it.
+const providers: LlmProviderConfig[] = [
+  {
+    id: 'anthropic-sonnet',
+    type: 'anthropic',
+    name: 'Anthropic Sonnet',
+    modelId: 'claude-sonnet-4-6',
+    supportsImages: true,
+    contextWindow: 200000,
+    temperature: 0.2,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+]
 
 beforeEach(() => {
   storageValues.clear()
@@ -97,7 +122,12 @@ afterEach(() => {
 })
 
 describe('scheduled provider resolution', () => {
-  it('uses an explicit scheduled provider', async () => {
+  // The runner names the provider and stops there. Its model, endpoint and
+  // credentials are resolved from the id on the server, which is what let the
+  // client-side lookup and its unreachable-versus-empty guard go: the guard
+  // existed because a failed lookup and an empty list looked the same, and a
+  // job risked running on the built-in provider with the wrong credentials.
+  it('names the provider and sends no configuration', async () => {
     const { getChatServerResponse } = await import('./getChatServerResponse')
 
     await getChatServerResponse({
@@ -106,10 +136,24 @@ describe('scheduled provider resolution', () => {
     })
 
     expect(fetchBodies[0]).toMatchObject({
-      provider: 'anthropic',
-      providerName: 'Anthropic Sonnet',
-      model: 'claude-sonnet-4-6',
+      target: { type: 'browseros', providerId: 'anthropic-sonnet' },
+      isScheduledTask: true,
     })
+    for (const field of ['apiKey', 'model', 'provider', 'baseUrl']) {
+      expect(field in fetchBodies[0]).toBe(false)
+    }
+  })
+
+  // A job created without picking a provider names none, and the server uses
+  // whichever is selected.
+  it('leaves the provider unnamed when the job has none', async () => {
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+
+    await getChatServerResponse({ message: 'Run my schedule' })
+
+    expect(
+      (fetchBodies[0] as { target: { providerId?: string } }).target.providerId,
+    ).toBeUndefined()
   })
 
   it('uses an explicit refine provider', async () => {
@@ -132,31 +176,3 @@ describe('scheduled provider resolution', () => {
     })
   })
 })
-
-const timestamp = 1000
-
-const providers: LlmProviderConfig[] = [
-  {
-    id: 'browseros',
-    type: 'browseros',
-    name: 'BrowserOS',
-    modelId: 'browseros-auto',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-  {
-    id: 'anthropic-sonnet',
-    type: 'anthropic',
-    name: 'Anthropic Sonnet',
-    modelId: 'claude-sonnet-4-6',
-    apiKey: 'sk-ant',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  },
-]

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
+import type { UIMessageChunk } from 'ai'
 import * as _ai from 'ai'
 import type { KlavisProxyStatus } from '../../../src/api/services/klavis'
 
@@ -41,14 +42,35 @@ const createAgentSpy = mock(async (config: unknown) => {
   return agentToReturn
 })
 
-const createAgentUIStreamResponseSpy = mock(
-  async (options: StreamResponseOptions) => {
-    if (!streamResponseHandler) {
-      throw new Error('No stream response handler configured')
-    }
-    return await streamResponseHandler(options)
-  },
-)
+const createAgentUIStreamSpy = mock(async (options: StreamResponseOptions) => {
+  if (!streamResponseHandler) {
+    throw new Error('No stream response handler configured')
+  }
+  const response = await streamResponseHandler(options)
+  const reader = response.body?.getReader()
+  const decoder = new TextDecoder()
+  return new ReadableStream<UIMessageChunk>({
+    async pull(controller) {
+      if (!reader) {
+        controller.close()
+        return
+      }
+      const { done, value } = await reader.read()
+      if (done) {
+        controller.close()
+        return
+      }
+      controller.enqueue({
+        type: 'text-delta',
+        id: 'mock-answer',
+        delta: decoder.decode(value),
+      })
+    },
+    async cancel(reason) {
+      await reader?.cancel(reason)
+    },
+  })
+})
 
 const resolveLLMConfigSpy = mock(
   async (config: {
@@ -74,7 +96,7 @@ const resolveLLMConfigSpy = mock(
 // 2026-07-17 test reliability audit for the failure mechanism.
 mock.module('ai', () => ({
   ..._ai,
-  createAgentUIStreamResponse: createAgentUIStreamResponseSpy,
+  createAgentUIStream: createAgentUIStreamSpy,
 }))
 
 mock.module('../../../src/agent/ai-sdk-agent', () => ({
@@ -83,7 +105,15 @@ mock.module('../../../src/agent/ai-sdk-agent', () => ({
   },
 }))
 
+// A module factory is a total replacement: anything it omits disappears for
+// every file that imports this module afterwards, and bun's registry is
+// process wide, so the failure surfaces somewhere else entirely and only when
+// file ordering puts that file second. Re-export the real module and override
+// the one function under test.
+import * as llmConfigModule from '../../../src/lib/clients/llm/config'
+
 mock.module('../../../src/lib/clients/llm/config', () => ({
+  ...llmConfigModule,
   resolveLLMConfig: resolveLLMConfigSpy,
 }))
 
@@ -96,10 +126,36 @@ mock.module('../../../src/lib/logger', () => ({
   },
 }))
 
-const { ChatService } = await import('../../../src/api/services/chat-service')
+const { ChatService: RealChatService } = await import(
+  '../../../src/api/services/chat-service'
+)
 const { ServerActivity } = await import(
   '../../../src/api/services/server-activity'
 )
+
+let leaseSequence = 0
+function createBrowserMcpStub() {
+  return {
+    createLease: mock(() => ({
+      token: `test-lease-${++leaseSequence}`,
+      updateBrowserContext: mock(() => {}),
+      revoke: mock(() => {}),
+    })),
+  }
+}
+
+// Individual tests only specify dependencies relevant to their behavior. Keep
+// the new authoritative runtime seam real at the constructor boundary without
+// repeating an unrelated lease stub in every fixture.
+const ChatService = class extends RealChatService {
+  constructor(deps: ConstructorParameters<typeof RealChatService>[0]) {
+    super({
+      serverPort: 32123,
+      browserMcp: createBrowserMcpStub() as never,
+      ...deps,
+    })
+  }
+}
 
 function createKlavisStub(
   getStatus: () => KlavisProxyStatus = () => ({
@@ -159,7 +215,7 @@ function createFakeAgent() {
 }
 
 describe('ChatService activity tracking', () => {
-  it('returns to idle when a chat stream is aborted mid-response', async () => {
+  it('stays busy when a subscriber disconnects and idles on explicit stop', async () => {
     resolveLLMConfigSpy.mockImplementation(async () => ({
       provider: 'openai',
       model: 'gpt-5',
@@ -167,18 +223,12 @@ describe('ChatService activity tracking', () => {
     }))
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
-    const abortController = new AbortController()
     streamResponseHandler = async () => {
       const encoder = new TextEncoder()
       return new Response(
         new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode('data: partial\n\n'))
-            abortController.signal.addEventListener(
-              'abort',
-              () => controller.close(),
-              { once: true },
-            )
           },
         }),
       )
@@ -198,10 +248,11 @@ describe('ChatService activity tracking', () => {
       activity,
     })
 
+    const conversationId = crypto.randomUUID()
     const response = await service.processMessage(
       {
         target: BROWSEROS_TARGET,
-        conversationId: crypto.randomUUID(),
+        conversationId,
         message: 'stop after the first chunk',
         isScheduledTask: false,
         mode: 'agent',
@@ -214,17 +265,18 @@ describe('ChatService activity tracking', () => {
           },
         },
       } as never,
-      abortController.signal,
+      new AbortController().signal,
     )
 
     expect(activity.isBusy()).toBe(true)
     const reader = response.body?.getReader()
     await reader?.read()
 
-    abortController.abort()
-
-    expect(activity.isBusy()).toBe(false)
     await reader?.cancel()
+    expect(activity.isBusy()).toBe(true)
+
+    expect(await service.stop(conversationId)).toBe(true)
+    expect(activity.isBusy()).toBe(false)
   })
 })
 
@@ -465,7 +517,7 @@ describe('ChatService scheduled task page lifecycle', () => {
 })
 
 describe('ChatService browser tool config', () => {
-  it('passes browser session into new and rebuilt agent sessions', async () => {
+  it('passes fresh lease tokens into new and rebuilt agent sessions', async () => {
     const firstAgent = createFakeAgent()
     const secondAgent = createFakeAgent()
     agentToReturn = firstAgent
@@ -519,8 +571,17 @@ describe('ChatService browser tool config', () => {
     const createCalls = createAgentSpy.mock.calls.slice(createCallsBefore)
     expect(createCalls).toHaveLength(2)
     for (const [config] of createCalls) {
-      expect(config).toMatchObject({ browserSession: { pages: {} } })
+      expect(config).toMatchObject({
+        serverPort: 32123,
+        browserToolLeaseToken: expect.stringContaining('test-lease-'),
+      })
+      expect(config).not.toHaveProperty('browserSession')
     }
+    const leaseTokens = createCalls.map(
+      ([config]) =>
+        (config as { browserToolLeaseToken: string }).browserToolLeaseToken,
+    )
+    expect(leaseTokens[0]).not.toBe(leaseTokens[1])
   })
 })
 
@@ -991,5 +1052,230 @@ describe('ChatService single-rebuild reconciliation', () => {
     expect(text).toContain(
       'The user connected a workspace during this conversation. Filesystem tools are now available. Working directory: /ws',
     )
+  })
+})
+
+describe('ChatService history persistence', () => {
+  beforeEach(() => {
+    resolveLLMConfigSpy.mockImplementation(async () => ({
+      provider: 'openai',
+      model: 'gpt-5',
+      apiKey: 'test-key',
+    }))
+  })
+
+  function persistenceBrowser() {
+    return {
+      resolveTabIds: mock(async () => new Map<number, number>()),
+      closePage: mock(async () => {}),
+    }
+  }
+
+  function browserOsRequest(
+    conversationId: string,
+    historyMode: 'local' | 'cloud',
+  ) {
+    return {
+      target: BROWSEROS_TARGET,
+      conversationId,
+      message: 'hello',
+      isScheduledTask: false,
+      mode: 'agent',
+      origin: 'sidepanel',
+      historyMode,
+      browserContext: {
+        activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
+      },
+    } as never
+  }
+
+  it('hydrates from and persists to the store in local mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      // A completed turn ends with the assistant reply.
+      await onFinish({
+        messages: [
+          ...agent.messages,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            parts: [{ type: 'text', text: 'hi there' }],
+          },
+        ],
+      })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => ({
+        id: 'stored',
+        messages: [
+          {
+            id: 'old',
+            role: 'user',
+            parts: [{ type: 'text', text: 'earlier' }],
+          },
+        ],
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+    const conversationId = crypto.randomUUID()
+
+    await service.processMessage(
+      browserOsRequest(conversationId, 'local'),
+      new AbortController().signal,
+    )
+
+    expect(conversationStore.get).toHaveBeenCalledWith(conversationId)
+    expect(agent.messages[0]?.parts[0]?.text).toBe('earlier')
+    expect(conversationStore.save).toHaveBeenCalledTimes(1)
+    const saved = conversationStore.save.mock.calls.at(-1)?.[0] as
+      | { id: string; targetType: string }
+      | undefined
+    expect(saved?.id).toBe(conversationId)
+    expect(saved?.targetType).toBe('browseros')
+  })
+
+  it('does not persist and drops the dangling user message when a turn errors', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    // The stream errored before any output: onFinish reports the history
+    // ending on the user message, with no assistant reply appended.
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => null),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const sessionStore = createSessionStore()
+    const conversationId = crypto.randomUUID()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      browserOsRequest(conversationId, 'local'),
+      new AbortController().signal,
+    )
+
+    // The errored turn produced no assistant reply, so nothing is persisted:
+    // a cold reload from SQLite stays clean. The in-memory session still holds
+    // the unanswered user message; the guard is persistence, not a session trim.
+    expect(conversationStore.save).not.toHaveBeenCalled()
+    expect(sessionStore.get(conversationId)).toBeDefined()
+  })
+
+  it('never touches the store and seeds from previousConversation in cloud mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => null),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      {
+        ...browserOsRequest(crypto.randomUUID(), 'cloud'),
+        previousConversation: [{ role: 'user', content: 'from client' }],
+      } as never,
+      new AbortController().signal,
+    )
+
+    expect(conversationStore.get).not.toHaveBeenCalled()
+    expect(conversationStore.save).not.toHaveBeenCalled()
+    expect(agent.messages.some((m) => m.parts[0]?.text === 'from client')).toBe(
+      true,
+    )
+  })
+
+  it('ignores a stored record whose target is not browseros in local mode', async () => {
+    const agent = createFakeAgent()
+    agentToReturn = agent
+    streamResponseHandler = async ({ onFinish }) => {
+      await onFinish({ messages: agent.messages })
+      return new Response('ok')
+    }
+    const conversationStore = {
+      get: mock(async () => ({
+        id: 'stored',
+        messages: [
+          {
+            id: 'foreign',
+            role: 'user',
+            parts: [{ type: 'text', text: 'acp history' }],
+          },
+        ],
+        targetType: 'claude',
+        agentId: 'some-agent',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+      save: mock(async () => ({
+        id: 'stored',
+        targetType: 'browseros',
+        lastMessagedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      })),
+    }
+    const service = new ChatService({
+      sessionStore: createSessionStore() as never,
+      klavis: createKlavisStub() as never,
+      browser: persistenceBrowser() as never,
+      conversationStore: conversationStore as never,
+    })
+
+    await service.processMessage(
+      browserOsRequest(crypto.randomUUID(), 'local'),
+      new AbortController().signal,
+    )
+
+    expect(
+      agent.messages.every((m) => m.parts[0]?.text !== 'acp history'),
+    ).toBe(true)
   })
 })

@@ -489,6 +489,9 @@ fn tab_and_window_schemas_omit_hidden_controls() {
     let tabs = tool_by_name("tabs");
     let tabs_schema = Value::Object(tabs.input_schema.as_ref().clone());
     assert!(tabs_schema.pointer("/properties/hidden").is_none());
+    // Focus is the user's call: agents cannot ask for a foreground tab.
+    assert!(tabs_schema.pointer("/properties/background").is_none());
+    assert!(!tabs.description.contains("foreground"));
 
     let windows = tool_by_name("windows");
     let windows_schema = Value::Object(windows.input_schema.as_ref().clone());
@@ -1281,4 +1284,109 @@ fn collect_schema_reference_paths(value: &Value, path: String, paths: &mut Vec<S
         }
         _ => {}
     }
+}
+
+#[test]
+fn every_tool_rejects_unknown_arguments() {
+    for tool in catalog() {
+        let schema = Value::Object(tool.input_schema.as_ref().clone());
+        let mut permissive = Vec::new();
+        collect_permissive_object_paths(&schema, "$".to_string(), &mut permissive);
+        assert!(
+            permissive.is_empty(),
+            "{} accepts unknown arguments at {}; add #[serde(deny_unknown_fields)] to the \
+             matching args struct",
+            tool.name,
+            permissive.join(", ")
+        );
+    }
+}
+
+/// Walks a generated input schema and reports every object node - nested ones included - that
+/// still accepts unknown properties.
+fn collect_permissive_object_paths(value: &Value, path: String, paths: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            if object.contains_key("properties")
+                && object.get("additionalProperties") != Some(&json!({ "not": {} }))
+            {
+                paths.push(path.clone());
+            }
+            for (key, child) in object {
+                collect_permissive_object_paths(child, format!("{path}.{key}"), paths);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_permissive_object_paths(item, format!("{path}[{index}]"), paths);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collects every `null` entry inside an `enum` array, as `path = value`. The
+/// compatibility problem is specific to `null` (from `Option<SomeEnum>`);
+/// numeric or boolean enums are valid JSON Schema and must not be flagged.
+fn null_enum_entries(schema: &Value, path: &str, found: &mut Vec<String>) {
+    match schema {
+        Value::Object(object) => {
+            if let Some(Value::Array(values)) = object.get("enum") {
+                for (index, value) in values.iter().enumerate() {
+                    if value.is_null() {
+                        found.push(format!("{path}/enum/{index} = {value}"));
+                    }
+                }
+            }
+            for (key, child) in object {
+                null_enum_entries(child, &format!("{path}/{key}"), found);
+            }
+        }
+        Value::Array(items) => {
+            for (index, child) in items.iter().enumerate() {
+                null_enum_entries(child, &format!("{path}/{index}"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn tool_schemas_never_put_null_inside_an_enum() {
+    // A Pydantic-backed MCP client decodes each `enum` entry as the declared type and
+    // rejects the whole tool list on a `null`, so an `Option<SomeEnum>` argument must not
+    // leak one. Optionality rides on `required` instead.
+    let mut found = Vec::new();
+    for tool in catalog() {
+        let input = Value::Object((*tool.input_schema).clone());
+        null_enum_entries(&input, &format!("{}/inputSchema", tool.name), &mut found);
+        if let Some(output) = tool.output_schema {
+            let output = Value::Object((*output).clone());
+            null_enum_entries(&output, &format!("{}/outputSchema", tool.name), &mut found);
+        }
+    }
+    assert!(found.is_empty(), "null enum entries: {found:#?}");
+}
+
+#[test]
+fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
+    let act = tool_by_name("act");
+    let schema = Value::Object((*act.input_schema).clone());
+
+    // `button` is Option<Button> in the tool args: three variants, no null, plain string type.
+    assert_eq!(
+        schema.pointer("/properties/button/enum"),
+        Some(&json!(["left", "middle", "right"]))
+    );
+    assert_eq!(
+        schema.pointer("/properties/button/type"),
+        Some(&json!("string"))
+    );
+
+    // Optionality is carried by `required`, which is why dropping the null is safe.
+    let required = schema
+        .pointer("/required")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("act should declare required arguments"));
+    assert!(!required.iter().any(|entry| entry == "button"));
 }

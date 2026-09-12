@@ -20,7 +20,7 @@ import type { UIMessage } from 'ai'
  *      as semantically empty, even though the SDK schema allows it
  *
  * This function guards against both layers so callers can filter
- * messages before passing them to `createAgentUIStreamResponse`.
+ * messages before passing them to `createAgentUIStream`.
  */
 export function hasMessageContent(message: UIMessage): boolean {
   if (message.parts.length === 0) return false
@@ -43,6 +43,29 @@ export function hasMessageContent(message: UIMessage): boolean {
  */
 export function filterValidMessages(messages: UIMessage[]): UIMessage[] {
   return messages.filter(hasMessageContent)
+}
+
+/**
+ * Remove `reasoning` parts from a message list before it is sent to the model.
+ *
+ * Reasoning is ephemeral. It stays in the durable and client-displayed history,
+ * but must not be replayed to the provider: convertToModelMessages can turn a
+ * multi-step assistant message into a reasoning-only assistant message (no text,
+ * no tool call), which serializes to `content: null` with no `tool_calls`. Strict
+ * OpenAI-compatible providers reject that with "The content field is a required
+ * field", so a conversation cannot continue past the first turn once a reasoning
+ * model has answered. Stripping reasoning from the request copy keeps replay
+ * provider-agnostic; the model still generates fresh reasoning for the new turn.
+ */
+export function stripReasoningParts(messages: UIMessage[]): UIMessage[] {
+  return messages
+    .map((message) => {
+      const parts = message.parts.filter((part) => part.type !== 'reasoning')
+      return parts.length === message.parts.length
+        ? message
+        : { ...message, parts }
+    })
+    .filter(hasMessageContent)
 }
 
 /**

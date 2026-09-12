@@ -73,7 +73,7 @@ describe('probeAcpAgent — input shape', () => {
     await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.argv).toContain(
-      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^0.75.1',
     )
     expect(lastCall?.authPolicy).toBe('skip')
   })
@@ -82,6 +82,13 @@ describe('probeAcpAgent — input shape', () => {
     nextResult = baseProbeResult()
     await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.timeoutMs).toBe(120_000)
+  })
+
+  it('spawns the probe in the home directory, never the sidecar process.cwd()', async () => {
+    const os = await import('node:os')
+    nextResult = baseProbeResult()
+    await probeAcpAgent({ type: 'claude' })
+    expect(lastCall?.cwd).toBe(os.homedir())
   })
 
   it('honours an explicit timeoutMs', async () => {
@@ -129,7 +136,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.argv).toContain(bunPath)
     expect(lastCall?.argv).toContain(
-      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^0.75.1',
     )
 
     fs.rmSync(tmpRoot, { recursive: true, force: true })
@@ -140,7 +147,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
     await probeAcpAgent({ type: 'claude' })
     expect(lastCall?.agent).toBeUndefined()
     expect(lastCall?.argv).toContain(
-      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^0.75.1',
     )
   })
 
@@ -151,7 +158,7 @@ describe('probeAcpAgent — bundled-Bun launcher swap', () => {
       resourcesDir: '/nonexistent/path/that/has/no/bundled/bun',
     })
     expect(lastCall?.agent).toBeUndefined()
-    expect(lastCall?.argv).toContain('@agentclientprotocol/codex-acp@^1.0.2')
+    expect(lastCall?.argv).toContain('@agentclientprotocol/codex-acp@^1.10.0')
   })
 })
 

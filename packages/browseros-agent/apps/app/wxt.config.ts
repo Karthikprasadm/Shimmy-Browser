@@ -1,7 +1,9 @@
+import { REPORTER_EXTENSION_ID } from '@browseros/diagnostics/contract'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'wxt'
 import { parseBrowserOSApiUrl } from './lib/browseros-api-url'
+import { archiveSourceMaps } from './lib/build/archive-source-maps'
 import { LEGACY_AGENT_EXTENSION_ID } from './lib/constants/legacyAgentExtensionId'
 import { PRODUCT_WEB_HOST } from './lib/constants/productWebHost'
 
@@ -18,8 +20,10 @@ const apiPattern = apiUrl.port
 export default defineConfig({
   outDir: 'dist',
   modules: ['@wxt-dev/module-react'],
-  webExt: {
-    disabled: true,
+  hooks: {
+    // All Vite builds (including Sentry uploads) finish before this hook; WXT's
+    // ZIP and the release CRX packer then consume the extension without maps.
+    'build:done': (wxt, output) => archiveSourceMaps(wxt.config, output),
   },
   manifest: {
     name: 'Shimmy Browser',
@@ -27,6 +31,7 @@ export default defineConfig({
     update_url: 'https://cdn.browseros.com/extensions/update-manifest.xml',
     // update_url: 'https://cdn.browseros.com/extensions/update-manifest.alpha.xml',
     externally_connectable: {
+      ids: [REPORTER_EXTENSION_ID],
       matches: [`https://${apiPattern}/*`, `https://*.${apiPattern}/*`],
     },
     web_accessible_resources: [
@@ -56,6 +61,8 @@ export default defineConfig({
       default_title: 'Shimmy Browser',
     },
     permissions: [
+      'system.cpu',
+      'system.memory',
       'topSites',
       'storage',
       'unlimitedStorage',
@@ -84,10 +91,7 @@ export default defineConfig({
               org: env.SENTRY_ORG,
               project: env.SENTRY_PROJECT,
               authToken: env.SENTRY_AUTH_TOKEN,
-              sourcemaps: {
-                // Bug with sentry & WXT - refer: https://github.com/wxt-dev/wxt/issues/1735
-                // filesToDeleteAfterUpload: ['./dist/**/*.map'],
-              },
+              // archiveSourceMaps retains full maps after every upload finishes.
             }),
           ]
         : []),

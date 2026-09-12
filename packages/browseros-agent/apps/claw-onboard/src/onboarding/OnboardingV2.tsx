@@ -12,10 +12,7 @@ import {
   type BrowserOSImportStatus,
   type BrowserOSOnboardingState,
 } from './browseros-onboarding-api'
-import {
-  type BrowserOSOnboardingBridge,
-  createBrowserOSOnboardingBridge,
-} from './browseros-onboarding-bridge'
+import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
 import { OnboardingShell } from './components/OnboardingShell'
 import {
   importSourceSelectionChangeFor,
@@ -30,10 +27,10 @@ import {
 import type { ImportPhase, Step } from './onboarding-v2.types'
 import { ImportStep } from './steps/ImportStep'
 import { ReadyStep } from './steps/ReadyStep'
+import { SetupStep } from './steps/SetupStep'
 import { WelcomeStep } from './steps/WelcomeStep'
 
 const TOTAL_STEPS = 3
-const BROWSEROS_MCP_PAGE_URL = 'chrome://newtab/#/mcp'
 
 const initialOnboardingState: BrowserOSOnboardingState = {
   apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
@@ -47,17 +44,6 @@ export function importPhaseFor(status: BrowserOSImportStatus): ImportPhase {
   if (status === 'failed') return 'failed'
   if (status === 'succeeded') return 'imported'
   return 'picker'
-}
-
-/** Leaves standalone onboarding for BrowserClaw's MCP connection page. */
-export function openBrowserOsMcpPage() {
-  window.location.assign(BROWSEROS_MCP_PAGE_URL)
-}
-
-/** Completes onboarding and leaves standalone mock onboarding when needed. */
-export function finishBrowserOSOnboarding(bridge: BrowserOSOnboardingBridge) {
-  bridge.complete()
-  if (bridge.isMock) openBrowserOsMcpPage()
 }
 
 /** Runs the standalone three-step BrowserClaw onboarding flow. */
@@ -74,8 +60,13 @@ export function OnboardingV2() {
     useState<BrowserOSOnboardingState>(initialOnboardingState)
   const didNotifyPageReady = useRef(false)
   const importPhase = importPhaseFor(onboardingState.status)
+  const isFinishing = Boolean(
+    onboardingState.setupState && onboardingState.setupState !== 'idle',
+  )
 
   useEffect(() => {
+    // Install first: pageReady may synchronously restore an in-flight setup
+    // after reload. Receiving it only renders state; it never sends COMPLETE.
     const cleanup = bridge.registerReceiver(setOnboardingState)
     if (!didNotifyPageReady.current) {
       didNotifyPageReady.current = true
@@ -121,27 +112,45 @@ export function OnboardingV2() {
     bridge.startImport(request)
   }
 
+  // The bridge publishes preparing before sending the finish request and
+  // suppresses repeated exits. Chromium alone decides when it is safe to leave.
   function finishOnboarding() {
-    finishBrowserOSOnboarding(bridge)
+    bridge.complete()
   }
 
   return (
     <Form {...form}>
-      <OnboardingShell step={step} totalSteps={TOTAL_STEPS}>
-        {step === 0 && (
-          <WelcomeStep onPrimary={() => setStep(1)} onSkip={finishOnboarding} />
-        )}
-        {step === 1 && (
-          <ImportStep
-            phase={importPhase}
-            state={onboardingState}
-            form={form}
-            onImport={startImport}
-            onRefresh={() => bridge.refreshSources()}
-            onContinue={() => setStep(2)}
+      <OnboardingShell
+        step={step}
+        totalSteps={TOTAL_STEPS}
+        showProgress={!isFinishing}
+      >
+        {isFinishing ? (
+          <SetupStep
+            failed={onboardingState.setupState === 'failed'}
+            onRetry={() => bridge.retrySetup()}
           />
+        ) : (
+          <>
+            {step === 0 && (
+              <WelcomeStep
+                onPrimary={() => setStep(1)}
+                onSkip={finishOnboarding}
+              />
+            )}
+            {step === 1 && (
+              <ImportStep
+                phase={importPhase}
+                state={onboardingState}
+                form={form}
+                onImport={startImport}
+                onRefresh={() => bridge.refreshSources()}
+                onContinue={() => setStep(2)}
+              />
+            )}
+            {step === 2 && <ReadyStep onDone={finishOnboarding} />}
+          </>
         )}
-        {step === 2 && <ReadyStep onDone={finishOnboarding} />}
       </OnboardingShell>
     </Form>
   )

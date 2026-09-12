@@ -237,7 +237,7 @@ jobs:
         if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.6"
+          bun-version-file: packages/browseros-agent/package.json
 
       - name: Install BrowserOS server dependencies
         if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
@@ -362,8 +362,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          # libfuse2: appimagetool is itself an AppImage and needs FUSE
-          sudo apt-get install -y libfuse2
+          # These are runtime seams of the packaging verifier, not merely
+          # incidental runner state: appimagetool needs FUSE, dpkg-deb builds
+          # and inspects the archive, and libc-bin supplies ldd.
+          sudo apt-get install -y libfuse2 dpkg libc-bin
           "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
 
       - name: Install SSL.com CodeSignTool
@@ -390,7 +392,7 @@ jobs:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.source.outputs.sha }}
           BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server-version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server-version || '' }}
-          BROWSERCLAW_ONBOARD_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
+          ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding-version }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ inputs.extension-version && format('{0}/updates/extensions/bundled-manifest.xml', github.workspace) || '' }}
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension-version }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

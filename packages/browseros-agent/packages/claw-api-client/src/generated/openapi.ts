@@ -5,6 +5,22 @@
  */
 
 export interface paths {
+  '/system/diagnostics': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getSystemDiagnostics']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/system/health': {
     parameters: {
       query?: never
@@ -433,6 +449,12 @@ export interface components {
       /** @enum {string} */
       status: 'ok'
     }
+    SystemDiagnostics: {
+      version: string
+      os: string
+      /** @description User-facing OS release; unavailable when it cannot be determined. */
+      osVersion: string | null
+    }
     SystemInfo: {
       product: string
       version: string
@@ -530,6 +552,8 @@ export interface components {
       label: string
       name: string
       site?: string
+      /** @description Agent-declared, PII-scrubbed one-or-two-line summary of the task, used for audit search. Absent when the session never declared one. */
+      taskSummary?: string
       /** Format: int64 */
       startedAt: number
       /** Format: int64 */
@@ -961,6 +985,27 @@ export interface components {
 }
 export type $defs = Record<string, never>
 export interface operations {
+  getSystemDiagnostics: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Public server version and operating-system release for support diagnostics. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SystemDiagnostics']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
   getHealth: {
     parameters: {
       query?: never

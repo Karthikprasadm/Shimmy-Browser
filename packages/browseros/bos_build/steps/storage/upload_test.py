@@ -4,12 +4,14 @@
 import unittest
 import tempfile
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 from bos_build.core.context import ArtifactRegistry
 from bos_build.release.prepared_resources import PreparedResourcesManifest
+from bos_build.steps.package.linux_packaging import LinuxPackagingError
 from bos_build.steps.storage.upload import (
     _get_artifact_key,
     generate_release_json,
@@ -27,7 +29,7 @@ def _upload_ctx(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         env=SimpleNamespace(
-            browserclaw_onboard_resource_version=None,
+            onboarding_resource_version=None,
             browserclaw_server_resource_version=None,
             browseros_server_resource_version=None,
             bundled_product_extension_version=None,
@@ -41,16 +43,115 @@ def _upload_ctx(
             display_name=display_name,
             artifact_prefix=artifact_prefix,
         ),
+        architecture="x64",
         chromium_version="136.0.0.0",
         browseros_chromium_version="136.0.0.0.1",
         get_dist_dir=lambda: dist_dir,
         get_semantic_version=lambda: "1.2.3",
+        get_artifact_name=lambda kind: (
+            f"{artifact_prefix}_v1.2.3_x64.AppImage"
+            if kind == "appimage"
+            else f"{artifact_prefix}_v1.2.3_amd64.deb"
+        ),
         get_sparkle_version=lambda: "10000.1.2.3",
         get_release_path=lambda platform: (f"releases/{product_id}/1.2.3/{platform}/"),
     )
 
 
 class UploadMetadataTest(unittest.TestCase):
+    def test_deferred_linux_upload_rejects_partial_registered_pair(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: False),
+            mock.patch("bos_build.steps.storage.upload.IS_WINDOWS", lambda: False),
+            mock.patch.dict(
+                "os.environ",
+                {"BROWSEROS_DEFER_R2_UPLOAD": "1"},
+                clear=False,
+            ),
+        ):
+            root = Path(tmp)
+            ctx = _upload_ctx(root)
+            appimage = root / ctx.get_artifact_name("appimage")
+            appimage.write_bytes(b"appimage")
+            appimage.chmod(0o755)
+            ctx.artifact_registry.add("appimage", appimage)
+
+            with self.assertRaisesRegex(
+                LinuxPackagingError,
+                "registry is partial",
+            ):
+                upload_release_artifacts(ctx)
+
+    def test_deferred_linux_upload_uses_only_the_registered_exact_pair(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: False),
+            mock.patch("bos_build.steps.storage.upload.IS_WINDOWS", lambda: False),
+            mock.patch.dict(
+                "os.environ",
+                {"BROWSEROS_DEFER_R2_UPLOAD": "1"},
+                clear=False,
+            ),
+        ):
+            root = Path(tmp)
+            ctx = _upload_ctx(root)
+            appimage = root / ctx.get_artifact_name("appimage")
+            deb = root / ctx.get_artifact_name("deb")
+            appimage.write_bytes(b"registered-appimage")
+            appimage.chmod(0o755)
+            deb.write_bytes(b"registered-deb")
+            (root / "BrowserOS_v1.2.3_old.AppImage").write_bytes(b"stale")
+            (root / "BrowserOS_neo_v1.2.3_x64.AppImage").write_bytes(b"sibling")
+            ctx.artifact_registry.add("appimage", appimage)
+            ctx.artifact_registry.add("deb", deb)
+
+            success, release = upload_release_artifacts(ctx)
+
+        self.assertTrue(success)
+        self.assertEqual(set(release["artifacts"]), {"x64_appimage", "x64_deb"})
+        self.assertEqual(
+            release["artifacts"]["x64_appimage"]["filename"],
+            appimage.name,
+        )
+        self.assertEqual(release["artifacts"]["x64_deb"]["filename"], deb.name)
+
+    def test_deferred_upload_writes_exact_receipt_without_r2_mutation(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch("bos_build.steps.storage.upload.BOTO3_AVAILABLE", False),
+            mock.patch("bos_build.steps.storage.upload.IS_MACOS", lambda: True),
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "BROWSEROS_DEFER_R2_UPLOAD": "1",
+                    "BROWSEROS_BUILD_SOURCE_SHA": "a" * 40,
+                    "BROWSEROS_BUILD_RESERVATION_SHA": "b" * 40,
+                },
+                clear=False,
+            ),
+            mock.patch("bos_build.steps.storage.upload.get_r2_client") as get_client,
+            mock.patch(
+                "bos_build.steps.storage.upload.upload_file_to_r2"
+            ) as upload_file,
+        ):
+            root = Path(tmp)
+            filename = "BrowserOS_v1.2.3_arm64.dmg"
+            (root / filename).write_bytes(b"signed-dmg")
+            ctx = _upload_ctx(root)
+
+            success, release = upload_release_artifacts(
+                ctx,
+                {filename: {"sparkle_signature": "SIG==", "sparkle_length": 10}},
+            )
+            persisted = json.loads((root / "release.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(success)
+        self.assertEqual(release["reservation_sha"], "b" * 40)
+        self.assertEqual(persisted, release)
+        get_client.assert_not_called()
+        upload_file.assert_not_called()
+
     def test_release_json_records_actions_provenance(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -99,7 +200,7 @@ class UploadMetadataTest(unittest.TestCase):
             ctx = _upload_ctx(Path(tmp))
             ctx.env.browseros_server_resource_version = "0.0.129"
             ctx.env.bundled_product_extension_version = "0.0.125.0"
-            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+            ctx.env.onboarding_resource_version = "0.0.15"
 
             release = generate_release_json(
                 ctx,
@@ -112,7 +213,7 @@ class UploadMetadataTest(unittest.TestCase):
             {
                 "server": "0.0.129",
                 "agent": "0.0.125.0",
-                "claw-onboard": "0.0.15",
+                "app-onboard": "0.0.15",
             },
         )
 
@@ -126,7 +227,7 @@ class UploadMetadataTest(unittest.TestCase):
             )
             ctx.env.browserclaw_server_resource_version = "0.0.29"
             ctx.env.bundled_product_extension_version = "0.2.2.0"
-            ctx.env.browserclaw_onboard_resource_version = "0.0.15"
+            ctx.env.onboarding_resource_version = "0.0.15"
 
             release = generate_release_json(
                 ctx,
@@ -159,7 +260,7 @@ class UploadMetadataTest(unittest.TestCase):
                 component_versions={
                     "server": "0.0.128",
                     "agent": "0.0.116.0",
-                    "claw-onboard": "0.0.12",
+                    "app-onboard": "0.0.12",
                 },
                 files={},
             )

@@ -1,4 +1,5 @@
-import { type FC, type ReactNode, useEffect, useState } from 'react'
+import { DiagnosticsPage } from '@browseros/diagnostics/view'
+import type { FC } from 'react'
 import { HashRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { AuthLayout } from '@/components/layout/AuthLayout'
 import { SettingsSidebarLayout } from '@/components/layout/SettingsSidebarLayout'
@@ -11,16 +12,14 @@ import { LoginPage } from '@/screens/auth/LoginPage'
 import { LogoutPage } from '@/screens/auth/LogoutPage'
 import { ConnectMCP } from '@/screens/connect-mcp/ConnectMCP'
 import { CustomizationPage } from '@/screens/customization/CustomizationPage'
+import { FeaturesPage } from '@/screens/features/Features'
 import { SurveyPage } from '@/screens/jtbd-agent/SurveyPage'
 import { LlmHubPage } from '@/screens/llm-hub/LlmHubPage'
 import { MCPSettingsPage } from '@/screens/mcp-settings/MCPSettingsPage'
 import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
-import { OnboardingDemo } from '@/screens/onboarding/demo/OnboardingDemo'
-import { FeaturesPage } from '@/screens/onboarding/features/Features'
-import { Onboarding } from '@/screens/onboarding/index/Onboarding'
-import { StepsLayout } from '@/screens/onboarding/steps/StepsLayout'
+import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 import { UsagePage } from '@/screens/usage/UsagePage'
@@ -82,6 +81,7 @@ export const App: FC = () => {
             <Route path="chat" element={<LlmHubPage />} />
             <Route path="mcp" element={<MCPSettingsPage />} />
             <Route path="customization" element={<CustomizationPage />} />
+            <Route path="diagnostics" element={<DiagnosticsPage />} />
             <Route
               path="search"
               element={<Navigate to="/settings/ai" replace />}
@@ -92,39 +92,13 @@ export const App: FC = () => {
           </Route>
         </Route>
 
+        <Route path="features" element={<FeaturesPage />} />
+
+        {/* First-run setup, opened by the native onboarding on completion.
+            Outside every layout route on purpose: no sidebar, no chrome. */}
         <Route path="onboarding">
-          <Route
-            index
-            element={
-              <OnboardingRouteGuard>
-                <Onboarding />
-              </OnboardingRouteGuard>
-            }
-          />
-          <Route
-            path="steps/:stepId"
-            element={
-              <OnboardingRouteGuard>
-                <StepsLayout />
-              </OnboardingRouteGuard>
-            }
-          />
-          <Route
-            path="demo"
-            element={
-              <OnboardingRouteGuard>
-                <OnboardingDemo />
-              </OnboardingRouteGuard>
-            }
-          />
-          <Route
-            path="features"
-            element={
-              <OnboardingRouteGuard>
-                <FeaturesPage />
-              </OnboardingRouteGuard>
-            }
-          />
+          <Route path="ai" element={<OnboardingAiPage />} />
+          <Route index element={<Navigate to="/onboarding/ai" replace />} />
         </Route>
 
         <Route path="/" element={<Navigate to="/home" replace />} />

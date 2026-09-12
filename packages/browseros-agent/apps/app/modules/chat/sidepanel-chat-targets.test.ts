@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, mock } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import {
   buildSidepanelChatTargets,
   clearSidepanelChatTargetSelectionForAgent,
+  commitChatTargetSelection,
   persistSidepanelChatTargetSelection,
+  resolveRepairedSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
@@ -90,6 +92,81 @@ describe('resolveSidepanelChatTarget', () => {
   })
 })
 
+describe('resolveRepairedSelection', () => {
+  const targets = buildSidepanelChatTargets({
+    providers: [provider],
+    agents: [agent],
+  })
+  const llmTarget = targets[0]
+  const acpTarget = targets[1]
+
+  it('keeps an ACP selection while agents are still loading (not ready)', () => {
+    // Regression guard: agents not settled yet, so the resolved target has
+    // fallen back to the LLM provider. The stored ACP selection must survive.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: llmTarget,
+        ready: false,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a selection that matches the resolved target', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: agent.id },
+        resolvedTarget: acpTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('keeps a stale ACP selection even when ready (never wiped by the fetch-backed list)', () => {
+    // Regression guard: the agents list is fetch-backed and can be stale or
+    // cross-context-stale (a persisted cache, or another context that has not
+    // refetched a newly-created agent). An absent agent must NOT trigger a repair
+    // that silently downgrades the ACP default to the LLM fallback.
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'acp', id: 'deleted-agent' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+
+  it('repairs a stale LLM selection to the resolved fallback once ready', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'removed-provider' },
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: provider.id } })
+  })
+
+  it('repairs to null when nothing resolves', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: undefined,
+        ready: true,
+      }),
+    ).toEqual({ repair: true, selection: null })
+  })
+
+  it('never repairs when there is no stored selection', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: null,
+        resolvedTarget: llmTarget,
+        ready: true,
+      }),
+    ).toEqual({ repair: false })
+  })
+})
+
 describe('target selection storage', () => {
   it('persists only target identity', async () => {
     const store = createSelectionStore()
@@ -112,6 +189,50 @@ describe('target selection storage', () => {
   })
 })
 
+describe('commitChatTargetSelection', () => {
+  it('persists an LLM selection and updates the default provider id', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'llm', id: provider.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'llm', id: provider.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(provider.id)
+  })
+
+  // Selecting an agent used to leave the default pointing at whichever llm
+  // provider was chosen before it, because the two lived in separate tables and
+  // the default could only name the llm one. They are one table now, so there
+  // is one selection and it records whatever was picked.
+  it('records an ACP selection as the default too', async () => {
+    const store = createSelectionStore()
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(
+      { kind: 'acp', id: agent.id },
+      { setDefaultProvider },
+      store,
+    )
+
+    expect(await store.getValue()).toEqual({ kind: 'acp', id: agent.id })
+    expect(setDefaultProvider).toHaveBeenCalledWith(agent.id)
+  })
+
+  it('clears the selection without touching the default provider id', async () => {
+    const store = createSelectionStore({ kind: 'acp', id: agent.id })
+    const setDefaultProvider = mock(async (_id: string) => {})
+
+    await commitChatTargetSelection(null, { setDefaultProvider }, store)
+
+    expect(await store.getValue()).toBeNull()
+    expect(setDefaultProvider).not.toHaveBeenCalled()
+  })
+})
+
 function createSelectionStore(
   initial: SidepanelChatTargetSelection | null = null,
 ) {
@@ -124,3 +245,51 @@ function createSelectionStore(
     watch: () => () => {},
   }
 }
+
+// Each extension surface holds its own cache of a list that lives on the
+// server, so one can be a refetch behind another. Repairing against a list
+// that has not caught up destroys a choice the user just made, which is what
+// made selecting a new provider appear to revert to BrowserOS.
+describe('resolveRepairedSelection with an incomplete list', () => {
+  const browserosTarget = {
+    kind: 'llm' as const,
+    id: 'browseros',
+    name: 'BrowserOS',
+    type: 'browseros' as const,
+    provider: {} as never,
+  }
+
+  it('leaves a selection this surface has not seen yet alone', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'just-created' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+        knownIds: new Set(['browseros']),
+      }).repair,
+    ).toBe(false)
+  })
+
+  // The case repair exists for: the provider is gone from a list that does
+  // know about it, so the selection genuinely dangles.
+  it('still repairs a selection the list can account for', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'deleted-but-known' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+        knownIds: new Set(['browseros', 'deleted-but-known']),
+      }),
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: 'browseros' } })
+  })
+
+  it('repairs as before when no list is given', () => {
+    expect(
+      resolveRepairedSelection({
+        selection: { kind: 'llm', id: 'gone' },
+        resolvedTarget: browserosTarget,
+        ready: true,
+      }).repair,
+    ).toBe(true)
+  })
+})

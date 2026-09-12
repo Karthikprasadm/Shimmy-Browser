@@ -1,25 +1,21 @@
+import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { storage } from '@wxt-dev/storage'
-import { sessionStorage } from '@/lib/auth/sessionStorage'
-import { markRestorePending } from '@/lib/browseros/activeSessionStorage'
 import { Capabilities } from '@/lib/browseros/capabilities'
-import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
+import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
 import {
-  ensureSidePanelRuntimeStateLoaded,
+  getAgentServerUrl,
+  getHealthCheckUrl,
+  getMcpServerUrl,
+} from '@/lib/browseros/helpers'
+import {
   initializeSidePanelOptions,
   migrateSidePanelIfOpenBetweenTabs,
   openSidePanel,
-  registerSidePanelOpenStateListeners,
-  SHIMMY_AGENT_SIDEPANEL_BUSY_KEY,
-  SHIMMY_SIDEPANEL_LAST_TAB_KEY,
-  setSidePanelPerWindowPreference,
+  prepareTabSidePanel,
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import {
-  setupLlmProvidersBackupToBrowserOS,
-  setupLlmProvidersSyncToBackend,
-  syncLlmProviders,
-} from '@/lib/llm-providers/storage'
+import { setupLlmProvidersBackupToBrowserOS } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
@@ -27,19 +23,12 @@ import {
 } from '@/lib/messaging/runtime/runtimeMessages'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import {
-  authRedirectPathStorage,
-  onboardingShownOnceStorage,
-} from '@/lib/onboarding/onboardingStorage'
-import { syncOnboardingProfile } from '@/lib/onboarding/syncOnboardingProfile'
-import {
-  setupScheduledJobsSyncToBackend,
-  syncScheduledJobs,
-} from '@/lib/schedules/syncSchedulesToBackend'
+import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { openBrowserOSHomeOnStartupStorage } from '@/lib/startup/startup-storage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
+import { startLocalFirstMigration } from '@/modules/local-first-migration/start-local-first-migration'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
 const BROWSEROS_HOME_URL = chrome.runtime.getURL('app.html#/home')
@@ -253,13 +242,31 @@ const cleanupLegacyToolApprovalStorage = async () => {
 }
 
 export default defineBackground(() => {
-  registerSidePanelOpenStateListeners()
-  ensureSidePanelRuntimeStateLoaded().catch(() => null)
+  registerDiagnostics('browseros', getAgentServerUrl)
+  // One background broker owns the long-lived server subscription and all
+  // panel-routing effects; individual React panels can come and go freely.
+  const conversationPanelBroker = createConversationPanelBroker()
+  void conversationPanelBroker.start()
+
+  // Registration never opens a panel. Per-tab URLs let panels opened by the
+  // native Alt+A shortcut identify their owner without following tab switches.
+  const preparePanel = (tabId: number) => {
+    void prepareTabSidePanel(tabId).catch(() => undefined)
+  }
+  void initializeSidePanelOptions()
+    .then(async () => {
+      for (const tab of await chrome.tabs.query({})) {
+        if (tab.id !== undefined) preparePanel(tab.id)
+      }
+    })
+    .catch(() => undefined)
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) preparePanel(tab.id)
+  })
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
-  setupLlmProvidersSyncToBackend()
-  setupScheduledJobsSyncToBackend()
+  startLocalFirstMigration()
 
   scheduledJobRuns()
 
@@ -339,16 +346,6 @@ export default defineBackground(() => {
   chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
       initializeSidePanelOptions().catch(() => null)
-      onboardingShownOnceStorage
-        .getValue()
-        .then((shownOnce) => {
-          if (shownOnce) return
-          chrome.tabs.create({
-            url: chrome.runtime.getURL('app.html#/onboarding'),
-          })
-          onboardingShownOnceStorage.setValue(true)
-        })
-        .catch(() => null)
     }
 
     if (details.reason === chrome.runtime.OnInstalledReason.UPDATE) {
@@ -444,14 +441,8 @@ export default defineBackground(() => {
     })
   })
 
-  onRuntimeMessage(
-    RuntimeMessageType.sidePanelScopeChanged,
-    async ({ data }) => {
-      await setSidePanelPerWindowPreference(data.perWindow)
-    },
-  )
-
   chrome.tabs.onRemoved.addListener((tabId) => {
+    void conversationPanelBroker.removeTab(tabId).catch(() => undefined)
     const key = String(tabId)
     selectedTextStorage.getValue().then((map) => {
       if (map[key]) {
@@ -459,20 +450,6 @@ export default defineBackground(() => {
         selectedTextStorage.setValue(rest)
       }
     })
-  })
-
-  sessionStorage.watch(async (newSession) => {
-    if (newSession?.user?.id) {
-      try {
-        await syncLlmProviders()
-      } catch {}
-      try {
-        await syncScheduledJobs()
-      } catch {}
-      try {
-        await syncOnboardingProfile(newSession.user.id)
-      } catch {}
-    }
   })
 
   onServerMessage('checkHealth', async () => {

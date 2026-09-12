@@ -481,19 +481,57 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
+    // SEP-2549 ttlMs/cacheScope are 2026-07-28-only; a legacy (2025-06-18) peer must
+    // not receive them (they are emitted only when the negotiated revision is 2026-07-28).
+    assert!(
+        body["result"]["ttlMs"].is_null(),
+        "ttlMs leaked to legacy peer"
+    );
+    assert!(
+        body["result"]["cacheScope"].is_null(),
+        "cacheScope leaked to legacy peer"
+    );
     let tool = body["result"]["tools"]
         .as_array()
         .and_then(|tools| tools.iter().find(|tool| tool["name"] == "name_session"))
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Rename this browser session: a small lowercase 2-3 word label for what this session is doing, e.g. \"invoice processing\". Tabs are grouped as <client>/<name>. Call again to rename."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <agentName>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
         json!({
             "type": "object",
-            "properties": { "name": { "type": "string", "maxLength": 64 } },
+            "properties": {
+                "name": { "type": "string", "maxLength": 64 },
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "shopping",
+                        "research",
+                        "email-and-messaging",
+                        "form-filling",
+                        "data-extraction",
+                        "testing-and-qa",
+                        "dev-tools",
+                        "social-media",
+                        "finance-and-admin",
+                        "internal-tools",
+                        "other"
+                    ],
+                    "description": "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list."
+                },
+                "summary": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers."
+                },
+                "session": {
+                    "type": "string",
+                    "description": "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session."
+                }
+            },
             "required": ["name"]
         })
     );
@@ -653,7 +691,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
     let tip = format!(
-        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
+        "Tip: this session is \"claude-code/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
     );
     for id in 3..=7 {
         let (status, _headers, body) = request_json_with_headers(

@@ -30,6 +30,7 @@ from ...release.prepared_resources import (
     load_prepared_resources,
 )
 from ...products.resource_sources import source_resources_for_product
+from ..package.linux_packaging import require_linux_artifacts
 
 
 def _sha256(path: Path) -> str:
@@ -74,7 +75,7 @@ def _release_provenance(ctx: Context) -> dict[str, object]:
         component_versions = {
             source.server_component: server_version,
             source.extension_component: ctx.env.bundled_product_extension_version,
-            source.onboarding_component: ctx.env.browserclaw_onboard_resource_version,
+            source.onboarding_component: ctx.env.onboarding_resource_version,
         }
         if all(component_versions.values()):
             provenance["component_versions"] = component_versions
@@ -88,6 +89,7 @@ def _release_provenance(ctx: Context) -> dict[str, object]:
         }
     provenance.update(
         {
+            "reservation_sha": os.environ.get("BROWSEROS_BUILD_RESERVATION_SHA", ""),
             "workflow_run_id": os.environ.get("GITHUB_RUN_ID", ""),
             "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
         }
@@ -114,6 +116,10 @@ class UploadModule(Step):
     description = "Upload build artifacts to Cloudflare R2"
 
     def validate(self, ctx: Context) -> None:
+        # Family nightlies persist the complete receipt in Actions first and
+        # publish it only after both signed builds and the state merge pass.
+        if os.environ.get("BROWSEROS_DEFER_R2_UPLOAD") == "1":
+            return
         if not BOTO3_AVAILABLE:
             raise ValidationError(
                 "boto3 library not installed - run: pip install boto3"
@@ -174,7 +180,10 @@ def generate_release_json(
 
     for artifact in artifacts:
         filename = artifact["filename"]
-        artifact_key = _get_artifact_key(filename, platform)
+        artifact_key = artifact.get("release_key") or _get_artifact_key(
+            filename,
+            platform,
+        )
 
         artifact_data = {
             "filename": filename,
@@ -182,7 +191,7 @@ def generate_release_json(
         }
 
         for key, value in artifact.items():
-            if key != "filename":
+            if key not in ("filename", "release_key"):
                 artifact_data[key] = value
 
         release_data["artifacts"][artifact_key] = artifact_data
@@ -196,6 +205,7 @@ def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
 
     provenance_fields = (
         "source_sha",
+        "reservation_sha",
         "parent_sha",
         "component_versions",
         "common_manifest_digest",
@@ -280,6 +290,12 @@ def _filter_product_artifacts(ctx: Context, artifacts: List[Path]) -> List[Path]
 
 def detect_artifacts(ctx: Context) -> List[Path]:
     """Find the active product's artifacts for the current platform."""
+    if not IS_MACOS() and not IS_WINDOWS():
+        # Linux is one correlated release result. The resolver handles both
+        # in-process registry handoff and deliberate exact-name disk recovery;
+        # allowing a glob here would make partial packages publishable again.
+        return list(require_linux_artifacts(ctx).paths)
+
     dist_dir = ctx.get_dist_dir()
     if not dist_dir.exists():
         return []
@@ -291,10 +307,6 @@ def detect_artifacts(ctx: Context) -> List[Path]:
     elif IS_WINDOWS():
         artifacts.extend(dist_dir.glob("*.exe"))
         artifacts.extend(dist_dir.glob("*.zip"))
-    else:
-        artifacts.extend(dist_dir.glob("*.AppImage"))
-        artifacts.extend(dist_dir.glob("*.deb"))
-
     return sorted(_filter_product_artifacts(ctx, artifacts))
 
 
@@ -303,42 +315,36 @@ def upload_release_artifacts(
     extra_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[bool, Optional[Dict]]:
     """Upload release artifacts and their metadata to R2."""
-    if not BOTO3_AVAILABLE:
+    deferred = os.environ.get("BROWSEROS_DEFER_R2_UPLOAD") == "1"
+    if not deferred and not BOTO3_AVAILABLE:
         log_warning("boto3 not installed. Skipping R2 upload.")
         log_info("Install with: pip install boto3")
         return True, None
 
     env = ctx.env
 
-    if not env.has_r2_config():
+    if not deferred and not env.has_r2_config():
         log_warning("R2 configuration not set. Skipping upload.")
         return True, None
 
+    platform = _get_platform()
     artifacts = detect_artifacts(ctx)
     if not artifacts:
         log_info("No artifacts found to upload")
         return True, None
 
-    platform = _get_platform()
     release_path = ctx.get_release_path(platform)
 
-    log_info(f"\nUploading to R2: {env.r2_bucket}/{release_path}")
+    if deferred:
+        log_info("\nPreparing deferred immutable release receipt")
+    else:
+        log_info(f"\nUploading to R2: {env.r2_bucket}/{release_path}")
     log_info(f"Found {len(artifacts)} artifact(s):")
     for artifact in artifacts:
         log_info(f"  - {artifact.name}")
 
-    client = get_r2_client(env)
-    if not client:
-        log_error("Failed to create R2 client")
-        return False, None
-
     artifact_metadata = []
-    for artifact_path in artifacts:
-        r2_key = f"{release_path}{artifact_path.name}"
-
-        if not upload_file_to_r2(client, artifact_path, r2_key, env.r2_bucket):
-            return False, None
-
+    for index, artifact_path in enumerate(artifacts):
         metadata = {
             "filename": artifact_path.name,
             "size": artifact_path.stat().st_size,
@@ -348,14 +354,41 @@ def upload_release_artifacts(
         if extra_metadata and artifact_path.name in extra_metadata:
             metadata.update(extra_metadata[artifact_path.name])
 
+        if platform == "linux":
+            # `detect_artifacts` returns LinuxArtifactPair.paths in this fixed
+            # order, so release identity comes from the deep interface rather
+            # than reparsing architecture tokens from filenames. Write this
+            # after optional metadata so callers cannot redefine identity.
+            format_name = ("appimage", "deb")[index]
+            metadata["release_key"] = f"{ctx.architecture}_{format_name}"
+
         artifact_metadata.append(metadata)
 
     release_data = generate_release_json(ctx, artifact_metadata, platform)
+    release_json_path = ctx.get_dist_dir() / "release.json"
+    release_json_path.write_text(json.dumps(release_data, indent=2))
+    if deferred:
+        # The receipt and DMG travel together as one Actions artifact. Keeping
+        # this step local prevents either product from becoming public before
+        # its sibling build and the family state transaction have succeeded.
+        ctx.artifact_registry.add("release_metadata", release_data)
+        log_success("Prepared release receipt for deferred immutable publication")
+        return True, release_data
+
+    client = get_r2_client(env)
+    if not client:
+        log_error("Failed to create R2 client")
+        return False, None
+
+    for artifact_path in artifacts:
+        r2_key = f"{release_path}{artifact_path.name}"
+        if not upload_file_to_r2(client, artifact_path, r2_key, env.r2_bucket):
+            return False, None
+
     existing_release_data = get_release_json(
         ctx.get_semantic_version(), platform, env, ctx.product.id
     )
     release_data = merge_release_metadata(existing_release_data, release_data)
-    release_json_path = ctx.get_dist_dir() / "release.json"
     release_json_path.write_text(json.dumps(release_data, indent=2))
 
     r2_key = f"{release_path}release.json"

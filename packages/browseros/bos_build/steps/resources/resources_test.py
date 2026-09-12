@@ -353,10 +353,10 @@ class CopyResourcesTest(unittest.TestCase):
             parent_sha="1" * 40,
             source_sha="2" * 40,
             browser_version="0.0.1",
-            component_versions={"claw-onboard": "0.0.12"},
+            component_versions={"app-onboard": "0.0.12"},
             files={"onboarding": prepared_file},
         )
-        destination = self.root.root / "resources/binaries/browseros_claw_onboard"
+        destination = self.root.root / "resources/binaries/browseros_onboarding"
         destination.mkdir(parents=True)
         (destination / "stale").write_text("stale")
         self.ctx.resource_mode = "source"
@@ -462,19 +462,15 @@ class CopyResourcesTest(unittest.TestCase):
                 self.assertTrue(op["managed"])
                 self.assertTrue(op["required"])
 
-    def test_real_config_copies_claw_onboard_resources_for_both_products(self):
+    def test_real_config_copies_neutral_onboarding_for_each_product(self):
         self.root.write_copy_config(self._real_copy_config())
         onboard_source = (
             self.root.root
             / "resources"
             / "binaries"
-            / "browseros_claw_onboard"
+            / "browseros_onboarding"
             / "resources"
         )
-        (onboard_source / "icon").mkdir(parents=True)
-        (onboard_source / "index.html").write_text("<html>onboard</html>")
-        (onboard_source / "icon" / "32.png").write_text("icon-bytes")
-
         onboard_dest = (
             self.chromium.src
             / "chrome"
@@ -486,6 +482,15 @@ class CopyResourcesTest(unittest.TestCase):
 
         for product in ("browseros", "browserclaw"):
             with self.subTest(product=product):
+                if onboard_source.exists():
+                    shutil.rmtree(onboard_source)
+                (onboard_source / "icon").mkdir(parents=True)
+                (onboard_source / "index.html").write_text(
+                    f"<html>{product}</html>"
+                )
+                (onboard_source / "icon" / "32.png").write_text(
+                    f"{product}-icon-bytes"
+                )
                 self._seed_required_resources(product, "arm64")
                 if onboard_dest.exists():
                     shutil.rmtree(onboard_dest)
@@ -504,11 +509,60 @@ class CopyResourcesTest(unittest.TestCase):
                     self.assertTrue(copy_resources_impl(ctx))
 
                 self.assertEqual(
-                    (onboard_dest / "index.html").read_text(), "<html>onboard</html>"
+                    (onboard_dest / "index.html").read_text(),
+                    f"<html>{product}</html>",
                 )
                 self.assertEqual(
-                    (onboard_dest / "icon" / "32.png").read_text(), "icon-bytes"
+                    (onboard_dest / "icon" / "32.png").read_text(),
+                    f"{product}-icon-bytes",
                 )
+
+    def test_real_config_has_one_required_neutral_onboarding_copy(self):
+        config = self._real_copy_config()
+        operations = [
+            operation
+            for operation in config["copy_operations"]
+            if operation["destination"]
+            == "chrome/browser/browseros/onboarding/resources"
+        ]
+
+        self.assertEqual(1, len(operations))
+        self.assertEqual(
+            "resources/binaries/browseros_onboarding/resources",
+            operations[0]["source"],
+        )
+        self.assertTrue(operations[0]["managed"])
+        self.assertTrue(operations[0]["required"])
+        self.assertNotIn("product", operations[0])
+
+    def test_real_config_debug_needs_only_neutral_onboarding_directory(self):
+        self.root.write_copy_config(self._real_copy_config())
+        self._seed_required_resources("browseros", "arm64")
+        self._seed_required_resources("browserclaw", "arm64")
+        source = (
+            self.root.root
+            / "resources/binaries/browseros_onboarding/resources/index.html"
+        )
+        source.write_text("debug-onboarding")
+
+        with patch(
+            "bos_build.steps.resources.resources.get_platform",
+            return_value="macos",
+        ):
+            ctx = make_context(
+                self.chromium,
+                self.root,
+                architecture="arm64",
+                build_type="debug",
+                product="browseros",
+            )
+            self.assertTrue(copy_resources_impl(ctx))
+
+        destination = (
+            self.chromium.src
+            / "chrome/browser/browseros/onboarding/resources/index.html"
+        )
+        self.assertEqual("debug-onboarding", destination.read_text())
 
     def _real_copy_config(self) -> dict:
         config_path = (
@@ -534,7 +588,7 @@ class CopyResourcesTest(unittest.TestCase):
         server.mkdir(parents=True, exist_ok=True)
         (server / binary).write_text(product)
         onboarding = (
-            self.root.root / "resources/binaries/browseros_claw_onboard/resources"
+            self.root.root / "resources/binaries/browseros_onboarding/resources"
         )
         onboarding.mkdir(parents=True, exist_ok=True)
         index = onboarding / "index.html"

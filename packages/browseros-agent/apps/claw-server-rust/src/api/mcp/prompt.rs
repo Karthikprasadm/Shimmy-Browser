@@ -22,8 +22,13 @@ Shared with other agents:
   tabs action="new" and work on that copy; leave the original untouched.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
-- Rename your session early with name_session using a 2-3 word task label;
-  tabs group as <client>/<name>.
+- Say who you are (e.g. "claude-code", "codex"): send it as the agentName
+  argument on every call if your tools take one, otherwise it comes from the
+  initialize handshake. It names this session, titles and colours your tab
+  group, and is how the user filters your runs in the audit log.
+- Name your session early with name_session: a 2-3 word task label, the category
+  that best fits the task, and a short PII-free summary you can search for later;
+  tabs group as <agentName>/<name>.
 - The user oversees this browser from the BrowserOS neo cockpit (live view,
   audit, replay).
 
@@ -70,6 +75,14 @@ helper (high ageDays) as a hint, not a guarantee: cross-check it against the liv
 page before trusting it, then re-save. Keep personal data out of saved helpers,
 they are shared across your sessions on that host.
 
+Save repeatable tasks, not just helpers. A helper caches one flow inside run; a
+neo task is the whole job the user re-runs by name. When you finish a browser
+task the user is likely to want again (a recurring check, a status report, a
+routine fetch), call save_skill with a short name, a one-line description, and the
+ordered steps naming the exact SDK calls you used. Save only genuinely
+repeatable, user-valuable tasks, never one-offs or exploratory dead-ends; a saved
+task shows up on the user's /skills and re-runs as /neo-<name>.
+
 If calls fail with "browser session not connected", the agent browser isn't
 running or paired — tell the user to start BrowserOS neo and check the cockpit;
 don't silently fall back to another browser tool.
@@ -85,5 +98,13 @@ mod tests {
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("independent subtasks get their own tabs"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("hidden window"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("separate window"));
+    }
+
+    #[test]
+    fn prompt_nudges_saving_repeatable_tasks_as_skills() {
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("save_skill"));
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Save repeatable tasks"));
+        // The anti-junk guardrail is behavior-defining; lock it against removal.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("never one-offs"));
     }
 }

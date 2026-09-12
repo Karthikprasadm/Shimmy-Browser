@@ -5,7 +5,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -24,23 +24,19 @@ import type {
 } from 'acpx/runtime'
 import { createFileSessionStore } from 'acpx/runtime'
 import type { UIMessage, UIMessageChunk } from 'ai'
+import { ChatService } from '../../../../src/api/services/chat-service'
 import {
   AcpAgentPreparationError,
   AcpAgentRuntime,
   AcpAgentSessionBusyError,
 } from '../../../../src/lib/agents/acp/acp-agent-runtime'
+import { BROWSEROS_ACP_INSTRUCTIONS } from '../../../../src/lib/agents/acp/browseros-instructions'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
-
-const SKILL = [
-  '---',
-  'name: browseros',
-  'description: BrowserOS browser skill',
-  '---',
-  'Use BrowserOS for browser work.',
-  '',
-].join('\n')
+import { DbConversationStore } from '../../../../src/lib/conversations/conversation-store'
+import { openBrowserOsDatabase } from '../../../../src/lib/db/client'
 
 const temporaryDirectories: string[] = []
+const BROWSER_TOOL_LEASE_TOKEN = 'runtime-test-lease'
 
 afterEach(async () => {
   await Promise.all(
@@ -59,9 +55,6 @@ async function runtimeFixture(options: {
   const root = await mkdtemp(join(tmpdir(), 'acp-agent-runtime-'))
   temporaryDirectories.push(root)
   const resourcesDir = join(root, 'resources')
-  const skillDir = join(resourcesDir, 'skills', 'browseros')
-  await mkdir(skillDir, { recursive: true })
-  await writeFile(join(skillDir, 'SKILL.md'), SKILL)
 
   const adapter = options.adapter ?? 'claude'
   const agent: AcpAgentDefinition = {
@@ -121,6 +114,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-1',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'say hello')],
         browserContext: { windowId: 7 },
         abortSignal: abortController.signal,
@@ -142,7 +137,7 @@ describe('AcpAgentRuntime', () => {
       nonInteractivePermissions: 'deny',
       sessionOptions: {
         model: 'claude-opus-4-1',
-        systemPrompt: { append: SKILL },
+        systemPrompt: { append: BROWSEROS_ACP_INSTRUCTIONS },
       },
       mcpServers: [
         {
@@ -150,8 +145,7 @@ describe('AcpAgentRuntime', () => {
           name: 'browseros',
           url: 'http://127.0.0.1:9100/mcp',
           headers: {
-            'X-BrowserOS-Scope-Id': 'conversation-1',
-            'X-BrowserOS-Default-Window-Id': '7',
+            'X-BrowserOS-Internal-Lease': BROWSER_TOOL_LEASE_TOKEN,
           },
         },
       ],
@@ -192,6 +186,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-2',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: initialMessages,
       }),
     )
@@ -199,6 +195,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-2',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           ...initialMessages,
           textMessage('assistant-2', 'assistant', 'first answer'),
@@ -219,7 +217,7 @@ describe('AcpAgentRuntime', () => {
     expect(fixture.providerSettings).toHaveLength(1)
   })
 
-  it('sends complete history when ACPX replaces a legacy session during prepare', async () => {
+  it('restores history when a replacement session emits only a startup notice', async () => {
     const fixture = await runtimeFixture({})
     const sessionKey = 'acp:claude-agent-id:legacy-conversation'
     const store = createFileSessionStore({ stateDir: fixture.stateDir })
@@ -253,7 +251,16 @@ describe('AcpAgentRuntime', () => {
         acpSessionId: 'fresh-session',
         agentCommand: 'env PATH=/bin claude-agent-acp',
         agentArgv: ['env', 'PATH=/bin', 'claude-agent-acp'],
-        messages: [],
+        messages: [
+          {
+            Agent: {
+              content: [
+                { Text: 'Auto mode unavailable; using Accept edits instead.' },
+              ],
+              tool_results: {},
+            },
+          },
+        ],
       })
     }
 
@@ -261,6 +268,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'legacy-conversation',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           textMessage('user-old', 'user', 'previous UI prompt'),
           textMessage('assistant-old', 'assistant', 'previous UI answer'),
@@ -278,6 +287,323 @@ describe('AcpAgentRuntime', () => {
     expect(fixture.acpRuntime.startTurnCalls[0]?.text).toContain('new prompt')
   })
 
+  it('assigns a distinct nonempty ID to every streamed assistant reply', async () => {
+    const fixture = await runtimeFixture({
+      idleTimeoutMs: 0,
+      runtime: new RecordingAcpRuntime({
+        turns: [
+          [{ type: 'text_delta', text: 'first answer', stream: 'output' }],
+          [{ type: 'text_delta', text: 'second answer', stream: 'output' }],
+        ],
+      }),
+    })
+    const history: UIMessage[] = []
+    for (const turn of [1, 2]) {
+      history.push(textMessage(`user-${turn}`, 'user', `question ${turn}`))
+      await collect(
+        await fixture.runtime.stream({
+          agent: fixture.agent,
+          conversationId: 'unique-replies',
+          browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+          readOnly: false,
+          messages: [...history],
+          onFinish: ({ messages }) => {
+            const reply = messages.at(-1)
+            if (!reply) throw new Error('Missing assistant reply')
+            expect(reply.role).toBe('assistant')
+            expect(reply.id).not.toBe('')
+            expect(history.some((message) => message.id === reply.id)).toBe(
+              false,
+            )
+            history.push(reply)
+          },
+        }),
+      )
+    }
+    expect(
+      history.filter((message) => message.role === 'assistant'),
+    ).toHaveLength(2)
+    await fixture.runtime.closeAllForAgent(fixture.agent.id)
+  })
+
+  it('sends only the latest turn when a persisted agent has real user history', async () => {
+    const fixture = await runtimeFixture({})
+    await saveAgentRecord(fixture, 'resumed', [
+      { User: { id: 'old', content: [{ Text: 'old question' }] } },
+    ])
+    await collect(
+      await fixture.runtime.stream(historyInput(fixture, 'resumed')),
+    )
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toBe(
+      'User: new question',
+    )
+  })
+
+  it('starts fresh when restoring the old agent fails during setup', async () => {
+    const fixture = await runtimeFixture({})
+    const store = await saveAgentRecord(fixture, 'setup-failure', [
+      { User: { id: 'old', content: [{ Text: 'old question' }] } },
+    ])
+    fixture.acpRuntime.setModeHook = async () => {
+      if (fixture.acpRuntime.ensureSessionCalls.length === 1)
+        throw resumeError()
+    }
+    fixture.acpRuntime.ensureSessionHook = async (input) => {
+      if (fixture.acpRuntime.ensureSessionCalls.length === 2) {
+        const record = await store.load(input.sessionKey)
+        if (!record) throw new Error('Missing saved agent session')
+        expect(record.acpx?.reset_on_next_ensure).toBe(true)
+        await store.save({ ...record, messages: [], acpx: {} })
+      }
+    }
+    await collect(
+      await fixture.runtime.stream(historyInput(fixture, 'setup-failure')),
+    )
+    expect(fixture.acpRuntime.ensureSessionCalls).toHaveLength(2)
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(1)
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toContain('old answer')
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toContain('new question')
+  })
+
+  it('retries a resume failure before output and persists only the successful reply', async () => {
+    const fixture = await runtimeFixture({
+      runtime: new RecordingAcpRuntime({
+        turns: [
+          [],
+          [{ type: 'text_delta', text: 'recovered answer', stream: 'output' }],
+        ],
+        results: [resumeFailure()],
+      }),
+    })
+    await saveAgentRecord(fixture, 'stream-failure', [
+      { User: { id: 'old', content: [{ Text: 'old question' }] } },
+    ])
+    const finished: UIMessage[][] = []
+    const parts = await collect(
+      await fixture.runtime.stream({
+        ...historyInput(fixture, 'stream-failure'),
+        onFinish: ({ messages }) => {
+          finished.push(messages)
+        },
+      }),
+    )
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(2)
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toBe(
+      'User: new question',
+    )
+    expect(fixture.acpRuntime.startTurnCalls[1]?.text).toContain('old answer')
+    expect(parts.filter((part) => part.type === 'error')).toEqual([])
+    expect(parts.filter((part) => part.type === 'start')).toHaveLength(1)
+    expect(parts.filter((part) => part.type === 'finish')).toHaveLength(1)
+    expect(finished).toHaveLength(1)
+    expect(finished[0]?.at(-1)?.parts).toContainEqual({
+      type: 'text',
+      text: 'recovered answer',
+      state: 'done',
+    })
+  })
+
+  it('stops after one fresh-session retry', async () => {
+    const fixture = await runtimeFixture({
+      runtime: new RecordingAcpRuntime({
+        results: [resumeFailure(), resumeFailure()],
+      }),
+    })
+    const parts = await collect(
+      await fixture.runtime.stream(historyInput(fixture, 'twice-failed')),
+    )
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(2)
+    expect(parts.filter((part) => part.type === 'error')).toHaveLength(1)
+  })
+
+  for (const activity of [
+    { type: 'text_delta', text: 'already started', stream: 'output' },
+    {
+      type: 'tool_call',
+      toolCallId: 'tool-1',
+      title: 'Click button',
+      status: 'in_progress',
+      rawInput: { button: 'Submit' },
+    },
+  ] satisfies AcpRuntimeEvent[]) {
+    it(`does not retry after ${activity.type} activity`, async () => {
+      const fixture = await runtimeFixture({
+        runtime: new RecordingAcpRuntime({
+          turns: [[activity]],
+          results: [resumeFailure()],
+        }),
+      })
+      const parts = await collect(
+        await fixture.runtime.stream(historyInput(fixture, 'already-started')),
+      )
+      expect(fixture.acpRuntime.startTurnCalls).toHaveLength(1)
+      expect(fixture.acpRuntime.closeCalls).toHaveLength(0)
+      expect(parts.filter((part) => part.type === 'error')).toHaveLength(1)
+    })
+  }
+
+  it('honors cancellation while recovering a stale session', async () => {
+    const controller = new AbortController()
+    const fixture = await runtimeFixture({
+      runtime: new RecordingAcpRuntime({ results: [resumeFailure()] }),
+    })
+    fixture.acpRuntime.closeHook = async () => controller.abort()
+    await collect(
+      await fixture.runtime.stream({
+        ...historyInput(fixture, 'cancel-recovery'),
+        abortSignal: controller.signal,
+      }),
+    )
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(1)
+    expect(fixture.acpRuntime.ensureSessionCalls).toHaveLength(1)
+  })
+
+  it('keeps the conversation locked while replacing a stale agent', async () => {
+    const fixture = await runtimeFixture({
+      runtime: new RecordingAcpRuntime({ results: [resumeFailure()] }),
+    })
+    const closing = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    fixture.acpRuntime.closeHook = async () => {
+      closing.resolve()
+      await release.promise
+    }
+    const input = historyInput(fixture, 'locked-recovery')
+    const first = await fixture.runtime.stream(input)
+    await closing.promise
+    try {
+      await expect(fixture.runtime.stream(input)).rejects.toBeInstanceOf(
+        AcpAgentSessionBusyError,
+      )
+    } finally {
+      release.resolve()
+    }
+    await collect(first)
+    expect(fixture.acpRuntime.startTurnCalls).toHaveLength(2)
+  })
+
+  it('restores saved text while omitting an interrupted tool call', async () => {
+    const fixture = await runtimeFixture({})
+    const input = historyInput(fixture, 'interrupted-tool')
+    input.messages[1].parts.push({
+      type: 'dynamic-tool',
+      toolName: 'browser_click',
+      toolCallId: 'partial',
+      state: 'input-streaming',
+      input: undefined,
+    })
+    const parts = await collect(await fixture.runtime.stream(input))
+    expect(parts.filter((part) => part.type === 'error')).toEqual([])
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toContain('old answer')
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).not.toContain(
+      'browser_click',
+    )
+  })
+
+  it('continues with the new request when legacy display messages cannot be converted', async () => {
+    const fixture = await runtimeFixture({})
+    const input = historyInput(fixture, 'legacy-message')
+    input.messages[1] = {
+      id: 'legacy',
+      role: 'assistant',
+      content: 'old schema',
+    } as unknown as UIMessage
+    await collect(await fixture.runtime.stream(input))
+    expect(fixture.acpRuntime.startTurnCalls[0]?.text).toBe(
+      'User: new question',
+    )
+  })
+
+  it('persists every reply in SQLite across newtab, sidepanel, and a cold restart', async () => {
+    const fixture = await runtimeFixture({
+      idleTimeoutMs: 0,
+      runtime: new RecordingAcpRuntime({
+        turns: ['opened HN', 'we highlighted comments', 'I remember'].map(
+          (text) => [{ type: 'text_delta', text, stream: 'output' }],
+        ),
+      }),
+    })
+    const handle = openBrowserOsDatabase({
+      dbPath: join(fixture.stateDir, 'history.sqlite'),
+    })
+    const store = new DbConversationStore({ db: handle.db })
+    const conversationId = 'persisted-history'
+    const initial = [
+      textMessage('original-user', 'user', 'Highlight insightful comments'),
+      textMessage('', 'assistant', 'I highlighted 10 comments'),
+    ]
+    try {
+      await store.save({
+        id: conversationId,
+        targetType: 'claude',
+        agentId: fixture.agent.id,
+        messages: initial,
+      })
+      for (const [index, message] of [
+        'open hn',
+        'what did we do before?',
+        'remember this',
+      ].entries()) {
+        if (index === 2)
+          await fixture.runtime.closeAllForAgent(fixture.agent.id)
+        // A new service instance must reload the transcript from SQLite.
+        const service = new ChatService({
+          sessionStore: {
+            get: () => undefined,
+            set: () => {},
+            remove: () => false,
+            delete: async () => false,
+            count: () => 0,
+          } as never,
+          browser: { resolveTabIds: async () => new Map() } as never,
+          browserMcp: {
+            createLease: () => ({
+              token: BROWSER_TOOL_LEASE_TOKEN,
+              updateBrowserContext: () => {},
+              revoke: () => {},
+            }),
+          } as never,
+          serverPort: 9100,
+          acpAgentStore: { get: async () => fixture.agent },
+          acpRuntime: fixture.runtime,
+          conversationStore: store,
+        })
+        const response = await service.processMessage(
+          {
+            target: { type: 'claude', agentId: fixture.agent.id },
+            conversationId,
+            message,
+            isScheduledTask: false,
+            mode: 'agent',
+            origin: index === 0 ? 'newtab' : 'sidepanel',
+          },
+          new AbortController().signal,
+        )
+        expect(await response.text()).not.toContain('"type":"error"')
+      }
+      const saved = await store.get(conversationId)
+      if (!saved) throw new Error('Missing saved conversation')
+      expect(saved.messages).toHaveLength(8)
+      expect(saved.messages.slice(0, 2)).toEqual(initial)
+      const replies = saved.messages
+        .filter((message) => message.role === 'assistant')
+        .slice(1)
+      expect(replies).toHaveLength(3)
+      expect(replies.every((message) => message.id.length > 0)).toBe(true)
+      expect(new Set(replies.map((message) => message.id)).size).toBe(3)
+      expect(fixture.acpRuntime.startTurnCalls[2]?.text).toContain(
+        'I highlighted 10 comments',
+      )
+      expect(fixture.acpRuntime.startTurnCalls[2]?.text).toContain(
+        'we highlighted comments',
+      )
+      expect(saved.lastUserMessage).toBe('remember this')
+    } finally {
+      await fixture.runtime.closeAllForAgent(fixture.agent.id)
+      handle.sqlite.close()
+    }
+  })
+
   it('uses Codex config and falls back across full-access mode ids', async () => {
     const acpRuntime = new RecordingAcpRuntime({
       rejectedModes: ['agent-full-access'],
@@ -292,6 +618,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-3',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'work')],
       }),
     )
@@ -321,6 +649,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-text-file',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [
           {
             id: 'user-1',
@@ -356,6 +686,8 @@ describe('AcpAgentRuntime', () => {
       fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-4',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     ).rejects.toBeInstanceOf(AcpAgentPreparationError)
@@ -384,6 +716,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-turn-failure',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )
@@ -403,6 +737,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-5',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )
@@ -425,6 +761,8 @@ describe('AcpAgentRuntime', () => {
     const input = {
       agent: fixture.agent,
       conversationId: 'conversation-6',
+      browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+      readOnly: false,
       messages: [textMessage('user-1', 'user', 'hello')],
     }
     const firstStream = await fixture.runtime.stream(input)
@@ -453,6 +791,8 @@ describe('AcpAgentRuntime', () => {
         await fixture.runtime.stream({
           agent: fixture.agent,
           conversationId,
+          browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+          readOnly: false,
           messages: [textMessage(`user-${conversationId}`, 'user', 'hello')],
         }),
       )
@@ -475,6 +815,8 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.stream({
         agent: fixture.agent,
         conversationId: 'conversation-9',
+        browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+        readOnly: false,
         messages: [textMessage('user-1', 'user', 'hello')],
       }),
     )
@@ -489,6 +831,71 @@ describe('AcpAgentRuntime', () => {
     ).toBe(false)
   })
 })
+
+function historyInput(
+  fixture: Awaited<ReturnType<typeof runtimeFixture>>,
+  conversationId: string,
+) {
+  return {
+    agent: fixture.agent,
+    conversationId,
+    browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+    readOnly: false,
+    messages: [
+      textMessage('old-user', 'user', 'old question'),
+      textMessage('old-assistant', 'assistant', 'old answer'),
+      textMessage('new-user', 'user', 'new question'),
+    ],
+  }
+}
+
+function resumeError() {
+  return Object.assign(
+    new Error('Persistent ACP session could not be resumed'),
+    { detailCode: 'SESSION_RESUME_REQUIRED' },
+  )
+}
+
+function resumeFailure(): AcpRuntimeTurnResult {
+  return {
+    status: 'failed',
+    error: {
+      code: 'RUNTIME_ERROR',
+      detailCode: 'SESSION_RESUME_REQUIRED',
+      message: 'Persistent ACP session could not be resumed',
+    },
+  }
+}
+
+async function saveAgentRecord(
+  fixture: Awaited<ReturnType<typeof runtimeFixture>>,
+  conversationId: string,
+  messages: AcpSessionRecord['messages'],
+) {
+  const timestamp = new Date(0).toISOString()
+  const store = createFileSessionStore({ stateDir: fixture.stateDir })
+  await store.save({
+    schema: 'acpx.session.v1',
+    acpxRecordId: `acp:${fixture.agent.id}:${conversationId}`,
+    acpSessionId: 'saved-session',
+    agentCommand: 'claude-agent-acp',
+    cwd: fixture.stateDir,
+    createdAt: timestamp,
+    lastUsedAt: timestamp,
+    lastSeq: 0,
+    eventLog: {
+      active_path: 'events.jsonl',
+      segment_count: 0,
+      max_segment_bytes: 1024,
+      max_segments: 1,
+    },
+    messages,
+    updated_at: timestamp,
+    cumulative_token_usage: {},
+    request_token_usage: {},
+  })
+  return store
+}
 
 interface RecordingAcpRuntimeOptions {
   turns?: AcpRuntimeEvent[][]
@@ -508,6 +915,8 @@ class RecordingAcpRuntime implements AcpRuntime {
     discardPersistentState?: boolean
   }> = []
   ensureSessionHook?: (input: AcpRuntimeEnsureInput) => Promise<void>
+  setModeHook?: () => Promise<void>
+  closeHook?: () => Promise<void>
   private turnIndex = 0
 
   constructor(private options: RecordingAcpRuntimeOptions = {}) {}
@@ -531,6 +940,7 @@ class RecordingAcpRuntime implements AcpRuntime {
     this.turnIndex += 1
     return {
       requestId: `request-${this.turnIndex}`,
+      promptStarted: Promise.resolve(),
       events: iterate(events),
       result: Promise.resolve<AcpRuntimeTurnResult>(
         this.options.results?.[turnIndex] ?? {
@@ -553,6 +963,7 @@ class RecordingAcpRuntime implements AcpRuntime {
     mode: string
   }): Promise<void> {
     this.setModeCalls.push(input.mode)
+    await this.setModeHook?.()
     if (this.options.rejectedModes?.includes(input.mode)) {
       throw new Error(`unsupported mode: ${input.mode}`)
     }
@@ -582,6 +993,7 @@ class RecordingAcpRuntime implements AcpRuntime {
       reason: input.reason,
       discardPersistentState: input.discardPersistentState,
     })
+    await this.closeHook?.()
   }
 }
 

@@ -5,6 +5,19 @@ component release workflows before building the browser. Component workflows
 own component versions and publication. Native browser lanes consume the
 normal published-resource manifests and `latest` aliases.
 
+Signed nightlies use independent product transactions through
+`nightly-macos-browseros.yml` and `nightly-macos-browserclaw.yml`. Each freezes its
+source and resource pins, builds one signed browser, and merges only its product
+state before publishing its immutable browser artifacts and rolling prerelease.
+The shared allocation and publication locks protect versions and sibling feed
+entries. Historical family transactions remain recoverable; see
+[nightly-macos-ci.md](nightly-macos-ci.md) for ownership and cutover details.
+
+The existing `release-browseros.yml` and `release-browserclaw.yml` full-release
+entrypoints retain their native lane orchestration. Nightly browser jobs build
+the exact reservation commit (the frozen source plus its deterministic version
+overlay); later state commits and squash merges are never browser build inputs.
+
 ## Full-release graph
 
 Both products use the same fixed sequence:
@@ -108,6 +121,18 @@ matching release for the same source SHA instead of silently allocating a new
 version. Successful earlier stages are not rebuilt, and downstream browser
 lanes stay gated until the failed stage succeeds.
 
+For the combined signed nightly, rerun failed jobs in the original run when
+possible. The stable transaction identity is `nightly-<source-sha>`. Browser
+jobs fetch the transaction branch before merge, or
+`refs/pull/<PR_NUMBER>/head` after branch deletion, only to make the proven
+transaction history reachable. They verify that history contains the recorded
+reservation, then always check out `reservation_sha`: the frozen source plus
+the exact version/component overlay, without the later tracked-state commit.
+They never rebuild from the squash merge SHA, whose tree may include unrelated
+`main` commits. A new whole-run invocation that finds the transaction already
+merged fails closed; post-merge recovery must rerun failed jobs so it reuses the
+successful signed artifacts from the original run.
+
 If browser draft creation alone fails, rerun that job in the original run. It
 uses the R2 metadata written by the three native lanes and verifies the same
 source SHA and workflow run ID before refreshing the draft. Native lanes from
@@ -173,6 +198,8 @@ browser appcast. Inspect the browser draft before promotion.
 | `release-claw-onboard.yml` | onboarding release and resources |
 | `release-extensions.yml` | extension CRX release, versioned object, alpha/bundled manifests, version reflection |
 | `release-extension-feeds.yml` | explicit extension manifest preview or publication |
+| `nightly-macos-browseros.yml` | BrowserOS nightly transaction, product alpha snapshots, and `nightly-browseros` |
+| `nightly-macos-browserclaw.yml` | BrowserOS neo nightly transaction, product alpha snapshots, and `nightly-browserclaw` |
 | `release-browseros.yml` | ordered BrowserOS component releases, native builds, browser draft |
 | `release-browserclaw.yml` | ordered BrowserOS neo component releases, native builds, browser draft |
 
@@ -185,9 +212,22 @@ matching signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses
 repository variables `BROWSEROS_REPO_PATH` and `BROWSEROS_CHROMIUM_SRC` plus
-the signing and notarization secrets on the persistent builder.
-`BROWSEROS_CHROMIUM_SRC` is the pristine APFS clone base; the release build
-runs against a disposable copy-on-write workspace and cleans it under
-`if: always()`. Runner labels, cache behavior, and queue recovery are
-documented in `warpbuild-ci.md`; persistent macOS setup is in
-`nightly-macos-ci.md`.
+the signing and notarization secrets on the persistent builder. Signed macOS
+releases require separate base64-encoded Developer ID provisioning profiles:
+`PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` for `com.browseros.BrowserOS` and
+`PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64` for
+`com.browseros.BrowserClaw`. Each profile must authorize team `8YMKWU47S5`, its
+bundle-specific keychain groups, and
+`com.apple.developer.web-browser.public-key-credential`; the build validates
+those claims before signing. The profiles are not interchangeable because
+Apple assigns the managed capability to an exact App ID.
+Until Apple approves a profile, its secret may remain unset: the corresponding
+browser still builds, signs, and runs with the standard entitlements, but macOS
+platform passkeys are unavailable. Once a secret is configured, a missing,
+wrong, or malformed profile is a hard release error.
+`BROWSEROS_CHROMIUM_SRC` is a dedicated, CI-owned APFS clone base. Setup keeps
+its pinned Chromium identity strict but repairs local Git changes and
+BrowserOS-owned output directories before the release runs against a disposable
+copy-on-write workspace. The workspace is cleaned under `if: always()`. Runner
+labels, cache behavior, and queue recovery are documented in `warpbuild-ci.md`;
+persistent macOS setup is in `nightly-macos-ci.md`.

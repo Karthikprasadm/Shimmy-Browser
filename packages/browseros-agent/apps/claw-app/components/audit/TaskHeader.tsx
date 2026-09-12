@@ -59,7 +59,7 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <AgentDot slug={task.slug} />
-              <span className="font-semibold text-ink">{task.label}</span>
+              <span className="font-semibold text-ink">{task.slug}</span>
               <StatusBadge status={task.status} />
               {task.errorCount > 0 && (
                 <span className="text-[12.5px] text-red-600 dark:text-red-400">
@@ -70,6 +70,11 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
             <h1 className="font-extrabold text-2xl tracking-tight">
               {task.name}
             </h1>
+            {task.taskSummary && (
+              <p className="max-w-2xl text-[13px] text-ink-2 leading-snug">
+                {task.taskSummary}
+              </p>
+            )}
           </div>
         </div>
 

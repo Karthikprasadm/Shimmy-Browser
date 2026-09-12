@@ -5,12 +5,12 @@ import os
 import subprocess
 import tempfile
 import unittest
-from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 import yaml
 
+from bos_build.release.feeds.spec import all_feeds
 from bos_build.steps.source import provision
 
 
@@ -138,6 +138,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             self.assertIn(value, build_step["run"])
         self.assertEqual(upload["if"], "inputs.resource-mode == 'source'")
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertEqual(
+            build_step["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding-version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build_step["env"])
 
     def test_reusable_platform_workflows_forward_source_contract(self):
         for workflow_name in ("release-linux.yml", "release-windows.yml"):
@@ -233,6 +238,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         ):
             self.assertIn(value, build_step["run"])
         self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertEqual(
+            build_step["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding_version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build_step["env"])
 
     def test_macos_release_sets_up_ci_keychain_before_build_and_cleans_up(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -265,6 +275,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertIn("MACOS_CERTIFICATE_P12", secrets)
         self.assertIn("MACOS_CERTIFICATE_PWD", secrets)
+        self.assertIn("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64", secrets)
+        self.assertIn("PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64", secrets)
         self.assertLess(setup_index, build_index)
         self.assertLess(build_index, cleanup_index)
         self.assertLess(cleanup_index, upload_index)
@@ -275,6 +287,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             "MACOS_CERTIFICATE_P12",
             "MACOS_CERTIFICATE_PWD",
             "MACOS_KEYCHAIN_PASSWORD",
+            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
+            "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
         ):
             self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
         self.assertEqual(
@@ -284,6 +298,14 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertEqual(
             build["env"]["MACOS_CERTIFICATE_NAME"],
             "${{ steps.macos_signing.outputs.codesign_identity }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.browserclaw_passkey_profile_path }}",
         )
         self.assertEqual(cleanup["if"], "always()")
         self.assertEqual(
@@ -308,6 +330,11 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             build["env"]["BROWSEROS_BUILD_SOURCE_SHA"],
             "${{ steps.source.outputs.sha }}",
         )
+        self.assertEqual(
+            build["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding-version }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build["env"])
 
     def test_browser_lanes_do_not_receive_extension_build_secrets(self):
         secret_names = (
@@ -802,6 +829,16 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             pull_request_paths,
         )
 
+    def test_app_onboard_release_changes_trigger_build_system_tests(self):
+        test_workflow = self.load_workflow("bos-build-tests.yml")
+        triggers = test_workflow.get("on", test_workflow.get(True))
+        pull_request_paths = triggers["pull_request"]["paths"]
+
+        self.assertIn(
+            ".github/workflows/release-app-onboard.yml",
+            pull_request_paths,
+        )
+
     def test_macos_signing_helper_changes_trigger_build_system_tests(self):
         test_workflow = self.load_workflow("bos-build-tests.yml")
         triggers = test_workflow.get("on", test_workflow.get(True))
@@ -849,11 +886,13 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "product": "browseros",
             "server_workflow": "release-server.yml",
             "extension": "agent",
+            "onboarding_manifest": "apps/app-onboard/package.json",
         },
         "release-browserclaw.yml": {
             "product": "browserclaw",
             "server_workflow": "release-claw-server.yml",
             "extension": "browserclaw",
+            "onboarding_manifest": "apps/claw-onboard/package.json",
         },
     }
 
@@ -884,7 +923,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertEqual(workflow["permissions"], {})
 
     def test_preflight_freezes_the_default_branch_dispatch_sha(self):
-        for workflow_name in self.RELEASES:
+        for workflow_name, config in self.RELEASES.items():
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 preflight = workflow["jobs"]["preflight"]
@@ -907,6 +946,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     'source_sha="$(git rev-parse HEAD)"',
                     'test "$source_sha" = "$GITHUB_SHA"',
                     "bump_version.py --mode none",
+                    config["onboarding_manifest"],
                 ):
                     self.assertIn(token, resolve["run"])
 
@@ -1027,6 +1067,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
         )
         for workflow_name in workflows:
@@ -1046,6 +1087,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
         ):
             text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
@@ -1063,6 +1105,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
+            "release-app-onboard.yml",
             "release-extensions.yml",
             "release-extension-feeds.yml",
             "release-linux.yml",
@@ -1093,6 +1136,214 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         )
         self.assertIn("needs.publish_alpha.result == 'success'", reflect["if"])
 
+    def test_reusable_components_have_one_validated_state_owner(self):
+        for workflow_name in (
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-extensions.yml",
+        ):
+            workflow = self.load_workflow(workflow_name)
+            triggers = workflow.get("on", workflow.get(True))
+            call_inputs = triggers["workflow_call"]["inputs"]
+            dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
+            validate = self.named_step(workflow, "prepare", "Validate lifecycle inputs")
+            reflect = workflow["jobs"]["reflect-version"]
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(call_inputs["state_owner"]["default"], "component")
+                self.assertNotIn("state_owner", dispatch_inputs)
+                self.assertEqual(
+                    validate["env"]["STATE_OWNER"],
+                    "${{ inputs.state_owner || 'component' }}",
+                )
+                self.assertIn("component|suite", validate["run"])
+                self.assertIn("inputs.state_owner != 'suite'", reflect["if"])
+
+    def test_server_latest_aliases_reconcile_monotonically_inside_retained_lock(self):
+        expected_groups = {
+            "release-server.yml": "release-server",
+            "release-claw-server.yml": "release-claw-server-rust",
+        }
+        for workflow_name, group in expected_groups.items():
+            workflow = self.load_workflow(workflow_name)
+            latest = self.named_step(
+                workflow, "finalize", "Copy versioned objects to latest"
+            )
+            script = latest["run"]
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(workflow["concurrency"]["group"], group)
+                self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
+                self.assertNotIn("if", latest)
+                self.assertIn("current_version", script)
+                self.assertIn("sort -V", script)
+                self.assertIn("already newer", script)
+                self.assertIn("already matches version, source, and checksum", script)
+                self.assertIn("conflicts at version", script)
+                self.assertIn(
+                    'test("^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$"))',
+                    script,
+                )
+                self.assertIn("copy-object", script)
+                self.assertLess(
+                    script.index("already newer"), script.index("copy-object")
+                )
+
+    def test_server_latest_alias_behavior_covers_missing_older_same_and_newer(self):
+        fake_aws = r"""#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def option(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+
+operation = sys.argv[2]
+key = option("--key")
+state = Path(os.environ["FAKE_AWS_STATE"])
+targets = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+target = next(value for value in targets if key.endswith(f"-{value}.zip"))
+component = "artifacts/server" if key.startswith("artifacts/server/") else "claw-server-rust/prod-resources"
+marker = state / target
+
+if operation == "copy-object":
+    marker.touch()
+    with (state / "copies").open("a", encoding="utf-8") as stream:
+        stream.write(key + "\n")
+    print("{}")
+    raise SystemExit(0)
+
+if operation != "head-object":
+    raise SystemExit(f"unexpected fake aws operation: {operation}")
+
+is_latest = "/latest/" in key
+if is_latest and not marker.exists() and os.environ["FAKE_DEST_VERSION"] == "missing":
+    print("An error occurred (404) when calling HeadObject: Not Found", file=sys.stderr)
+    raise SystemExit(44)
+
+if is_latest and not marker.exists():
+    version = os.environ["FAKE_DEST_VERSION"]
+    release_sha = os.environ["FAKE_DEST_SOURCE"]
+    checksum = os.environ["FAKE_DEST_CHECKSUM"]
+    if checksum == "exact":
+        checksum = hashlib.sha256(target.encode()).hexdigest()
+else:
+    version = os.environ["VERSION"]
+    release_sha = os.environ["RELEASE_SHA"]
+    checksum = hashlib.sha256(target.encode()).hexdigest()
+print(json.dumps({
+    "ContentLength": 100,
+    "Metadata": {
+        "component": component,
+        "target": target,
+        "version": version,
+        "release-sha": release_sha,
+        "sha256": checksum,
+    },
+}))
+"""
+        cases = (
+            ("missing", "9" * 40, "f" * 64, 5, True),
+            ("0.0.1", "9" * 40, "f" * 64, 5, True),
+            ("1.2.3", "1" * 40, "exact", 0, True),
+            ("9.0.0", "9" * 40, "f" * 64, 0, True),
+            ("1.2.3", "9" * 40, "exact", 0, False),
+            ("1.2.3", "1" * 40, "f" * 64, 0, False),
+        )
+        for workflow_name in ("release-server.yml", "release-claw-server.yml"):
+            script = self.named_step(
+                self.load_workflow(workflow_name),
+                "finalize",
+                "Copy versioned objects to latest",
+            )["run"]
+            for (
+                destination_version,
+                destination_source,
+                destination_checksum,
+                copy_count,
+                succeeds,
+            ) in cases:
+                with (
+                    self.subTest(
+                        workflow=workflow_name,
+                        destination_version=destination_version,
+                        destination_source=destination_source,
+                    ),
+                    tempfile.TemporaryDirectory() as temp_dir,
+                ):
+                    temp_root = Path(temp_dir)
+                    fake_bin = temp_root / "bin"
+                    fake_bin.mkdir()
+                    aws = fake_bin / "aws"
+                    aws.write_text(fake_aws, encoding="utf-8")
+                    aws.chmod(0o755)
+                    state = temp_root / "state"
+                    state.mkdir()
+                    environment = {
+                        **os.environ,
+                        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                        "FAKE_AWS_STATE": str(state),
+                        "FAKE_DEST_VERSION": destination_version,
+                        "FAKE_DEST_SOURCE": destination_source,
+                        "FAKE_DEST_CHECKSUM": destination_checksum,
+                        "R2_ENDPOINT": "https://r2.invalid",
+                        "R2_BUCKET": "bucket",
+                        "RELEASE_SHA": "1" * 40,
+                        "VERSION": "1.2.3",
+                    }
+                    result = subprocess.run(
+                        [git_bash_path(), "-c", script],
+                        cwd=REPO_ROOT,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode == 0,
+                        succeeds,
+                        msg=result.stdout + result.stderr,
+                    )
+                    copies = state / "copies"
+                    copied = (
+                        copies.read_text(encoding="utf-8").splitlines()
+                        if copies.exists()
+                        else []
+                    )
+                    self.assertEqual(len(copied), copy_count)
+
+    def test_server_ota_hands_assembled_snapshot_to_suite_owner(self):
+        workflow = self.load_workflow("publish-server-ota.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        inputs = triggers["workflow_call"]["inputs"]
+        validate = self.named_step(
+            workflow, "validate", "Validate product snapshot ownership"
+        )
+        persist = self.named_step(workflow, "publish", "Persist alpha appcast snapshot")
+        publish = self.named_step(
+            workflow, "publish", "Publish committed alpha appcast"
+        )
+        upload = self.named_step(
+            workflow, "publish", "Hand alpha appcast to release suite"
+        )
+
+        self.assertEqual(inputs["state_owner"]["default"], "component")
+        self.assertEqual(
+            validate["env"]["STATE_OWNER"],
+            "${{ inputs.state_owner || 'component' }}",
+        )
+        self.assertIn("component|suite", validate["run"])
+        self.assertEqual(persist["if"], "inputs.state_owner != 'suite'")
+        self.assertEqual(publish["if"], "inputs.state_owner != 'suite'")
+        self.assertEqual(upload["if"], "inputs.state_owner == 'suite'")
+        self.assertTrue(str(upload["uses"]).startswith("actions/upload-artifact@"))
+        self.assertEqual(
+            upload["with"]["name"],
+            "server-ota-snapshot-${{ inputs.product }}",
+        )
+        self.assertEqual(upload["with"]["path"], "${{ inputs.snapshot_path }}")
+
     def test_extension_version_is_resolved_once(self):
         workflow = self.load_workflow("release-extensions.yml")
         resolve = self.named_step(workflow, "prepare", "Resolve extension release")[
@@ -1108,6 +1359,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             ("release-server.yml", "prepare", "Resolve release"),
             ("release-claw-server.yml", "prepare", "Resolve release"),
             ("release-claw-onboard.yml", "prepare", "Resolve release"),
+            ("release-app-onboard.yml", "prepare", "Resolve release"),
             ("release-extensions.yml", "prepare", "Resolve extension release"),
         )
         for workflow_name, job_name, step_name in jobs:
@@ -1121,9 +1373,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     "R2_SECRET_ACCESS_KEY",
                     "R2_BUCKET",
                 ):
-                    self.assertEqual(
-                        step["env"][name], f"${{{{ secrets.{name} }}}}"
-                    )
+                    self.assertEqual(step["env"][name], f"${{{{ secrets.{name} }}}}")
 
     def test_feed_snapshot_writers_share_a_retained_queue(self):
         jobs = (
@@ -1242,394 +1492,480 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         self.assertEqual(keychain_cleanup["if"], "always()")
 
 
-class NightlyWorkflowTest(unittest.TestCase):
-    NIGHTLIES = {
-        "nightly-browseros.yml": {
-            "product": "browseros",
-            "build_step": "Build BrowserOS (macOS arm64)",
-            "server_workflow": "release-server.yml",
-            "extension": "agent",
-            "extension_secret": "BROWSEROS_AGENT_V2_KEY",
-            "tag": "nightly-browseros",
-            "cron": "17 4 * * *",
-        },
-        "nightly-browserclaw.yml": {
-            "product": "browserclaw",
-            "build_step": "Build BrowserOS neo (macOS arm64)",
-            "server_workflow": "release-claw-server.yml",
-            "extension": "browserclaw",
-            "extension_secret": "BROWSERCLAW_KEY",
-            "tag": "nightly-browserclaw",
-            "cron": "47 6 * * *",
-        },
+class ProductNightlyWorkflowTest(unittest.TestCase):
+    PRODUCTS = {
+        "browseros": (
+            "BrowserOS",
+            "server",
+            "agent",
+            "server_version",
+            "agent_version",
+            "app_onboarding_version",
+            "appcast-server.alpha.xml",
+        ),
+        "browserclaw": (
+            "BrowserOS neo",
+            "claw-server",
+            "browserclaw",
+            "claw_server_version",
+            "browserclaw_version",
+            "onboarding_version",
+            "appcast-claw-server.alpha.xml",
+        ),
     }
 
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         path = WORKFLOW_DIR / workflow_name
         return yaml.safe_load(path.read_text(encoding="utf-8"))
 
-    def test_nightlies_freeze_main_and_reject_other_refs(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            triggers = workflow.get("on", workflow.get(True))
-            preflight = workflow["jobs"]["preflight"]
-            checkout = next(
-                step
-                for step in preflight["steps"]
-                if str(step.get("uses", "")).startswith("actions/checkout@")
-            )
-            resolve = next(
-                step
-                for step in preflight["steps"]
-                if step.get("name") == "Resolve nightly inputs"
-            )
-            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
-            with self.subTest(workflow=workflow_name):
-                self.assertEqual(triggers["schedule"], [{"cron": config["cron"]}])
-                self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-                for token in (
-                    '"$DEFAULT_BRANCH" != "main"',
-                    '"$SOURCE_REF" != "refs/heads/main"',
-                    'trigger_sha="$(git rev-parse HEAD)"',
-                    'test "$trigger_sha" = "$GITHUB_SHA"',
-                ):
-                    self.assertIn(token, resolve["run"])
-                self.assertNotIn("BROWSEROS_NIGHTLY_REF", text)
-                self.assertNotIn("target_ref", text)
+    def named_step(
+        self, workflow: dict[str, object], job_name: str, step_name: str
+    ) -> dict[str, object]:
+        return next(
+            step
+            for step in workflow["jobs"][job_name]["steps"]
+            if step.get("name") == step_name
+        )
 
-    def test_nightlies_publish_server_then_extension_before_browser(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            jobs = workflow["jobs"]
-            server = jobs["server"]
-            extension = jobs["extension"]
-            reserve = jobs["reserve"]
-            build = jobs["build"]
-            with self.subTest(workflow=workflow_name):
-                self.assertEqual(reserve["needs"], "preflight")
+    def test_manual_product_entries_replace_family_dispatch(self):
+        self.assertFalse((WORKFLOW_DIR / "nightly.yml").exists())
+        self.assertFalse((WORKFLOW_DIR / "nightly-macos-product.yml").exists())
+        for product, (
+            label,
+            _,
+            _,
+            server,
+            extension,
+            onboard,
+            _,
+        ) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                self.assertEqual(workflow["name"], f"Nightly: {label} (macOS arm64)")
                 self.assertEqual(
-                    reserve["uses"],
-                    "./.github/workflows/reserve-nightly-browser-version.yml",
+                    workflow.get("on", workflow.get(True)), {"workflow_dispatch": None}
                 )
-                self.assertEqual(set(server["needs"]), {"preflight", "reserve"})
+                self.assertEqual(workflow["permissions"], {})
                 self.assertEqual(
-                    server["uses"],
-                    f"./.github/workflows/{config['server_workflow']}",
-                )
-                self.assertEqual(
-                    server["with"]["ref"],
-                    "${{ needs.reserve.outputs.source_sha }}",
-                )
-                self.assertIs(server["with"]["publish_ota"], True)
-                self.assertEqual(server["secrets"], "inherit")
-
-                self.assertEqual(set(extension["needs"]), {"reserve", "server"})
-                self.assertEqual(
-                    extension["uses"],
-                    "./.github/workflows/release-extensions.yml",
-                )
-                self.assertEqual(extension["with"]["extension"], config["extension"])
-                self.assertEqual(
-                    extension["with"]["branch"],
-                    "${{ needs.reserve.outputs.source_sha }}",
-                )
-                self.assertIs(extension["with"]["publish_alpha_feed"], True)
-                self.assertEqual(extension["secrets"], "inherit")
-
-                self.assertEqual(
-                    set(build["needs"]),
+                    workflow["concurrency"],
                     {
-                        "preflight",
-                        "reserve",
-                        "server",
-                        "extension",
-                        "components",
-                    },
-                )
-                self.assertEqual(
-                    build["runs-on"],
-                    ["self-hosted", "macOS", "ARM64", "browseros-builder"],
-                )
-                self.assertNotIn("concurrency", workflow)
-                self.assertEqual(
-                    build["concurrency"],
-                    {
-                        "group": "macos-build",
+                        "group": "release-suite",
                         "cancel-in-progress": False,
                         "queue": "max",
                     },
                 )
-
-    def test_nightlies_use_published_resources_without_mac_component_toolchains(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
-            build = next(
-                step
-                for step in workflow["jobs"]["build"]["steps"]
-                if step.get("name") == config["build_step"]
-            )
-            with self.subTest(workflow=workflow_name):
-                self.assertEqual(text.count("uv run browseros build"), 1)
+                transaction = workflow["jobs"]["transaction"]
+                self.assertEqual(
+                    transaction["concurrency"],
+                    {
+                        "group": "release-component-allocation",
+                        "cancel-in-progress": False,
+                        "queue": "max",
+                    },
+                )
+                self.assertEqual(
+                    transaction["steps"][0]["with"]["ref"], "${{ github.sha }}"
+                )
+                self.assertEqual(
+                    set(transaction["outputs"]),
+                    {
+                        "state_ref",
+                        "source_sha",
+                        "reservation_sha",
+                        "browser_version",
+                        server,
+                        extension,
+                        onboard,
+                    },
+                )
+                reconcile = self.named_step(
+                    workflow, "transaction", "Reconcile product transaction"
+                )["run"]
                 for token in (
-                    "scripts/build/server.ts",
-                    "claw-server-rust-local.sh",
-                    "Setup Bun",
-                    "rustup",
-                    "--source-sha",
-                    "resource_mode: source",
+                    '"$DEFAULT_BRANCH" != "main"',
+                    '"$SOURCE_REF" != "refs/heads/main"',
+                    'test "$source_sha" = "$GITHUB_SHA"',
+                    "release suite reconcile",
+                    f"--product {product}",
+                    "--mode nightly",
+                    "Re-run failed jobs",
+                    "Only an open transaction can start builds",
                 ):
-                    self.assertNotIn(token, text)
-                for token in (
-                    "--profile nightly-macos",
-                    f"--product {config['product']}",
-                    "--arch arm64",
-                    "--resource-mode published",
+                    self.assertIn(token, reconcile)
+
+    def test_each_graph_prepares_builds_and_finalizes_only_its_product(self):
+        for product, (
+            _,
+            server,
+            extension,
+            server_pin,
+            extension_pin,
+            onboarding_pin,
+            snapshot,
+        ) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                jobs = workflow["jobs"]
+                build_name = f"build-{product}"
+                ota_name = "server-ota" if product == "browseros" else "claw-server-ota"
+                self.assertEqual(
+                    set(jobs),
+                    {
+                        "transaction",
+                        f"prepare-{server}",
+                        f"prepare-{extension}",
+                        "verify-components",
+                        build_name,
+                        f"finalize-{server}",
+                        f"finalize-{extension}",
+                        ota_name,
+                        "publish",
+                        "notify-failure",
+                    },
+                )
+                for component, workflow_name, pin in (
+                    (server, f"release-{server}.yml", server_pin),
+                    (extension, "release-extensions.yml", extension_pin),
                 ):
-                    self.assertIn(token, build["run"])
-                self.assertNotIn(config["extension_secret"], build["env"])
-                self.assertIn("SPARKLE_PRIVATE_KEY", build["env"])
-                self.assertIn("R2_SECRET_ACCESS_KEY", build["env"])
-                self.assertIn("BUNDLED_PRODUCT_EXTENSION_VERSION", build["env"])
-                self.assertIn("BROWSEROS_BUILD_SOURCE_SHA", build["env"])
+                    for phase in ("prepare", "finalize"):
+                        job = jobs[f"{phase}-{component}"]
+                        self.assertEqual(
+                            job["uses"], f"./.github/workflows/{workflow_name}"
+                        )
+                        self.assertEqual(job["with"]["state_owner"], "suite")
+                        self.assertEqual(
+                            job["with"]["version"],
+                            f"${{{{ needs.transaction.outputs.{pin} }}}}",
+                        )
+                        source_input = "branch" if component == extension else "ref"
+                        self.assertEqual(
+                            job["with"][source_input],
+                            "${{ needs.transaction.outputs.source_sha }}",
+                        )
+                        if phase == "prepare":
+                            self.assertEqual(job["needs"], "transaction")
+                            self.assertEqual(job["with"]["mode"], "build")
+                            self.assertIs(job["with"]["defer_finalize"], True)
+                        else:
+                            self.assertEqual(
+                                set(job["needs"]), {"transaction", build_name}
+                            )
+                            self.assertEqual(job["with"]["mode"], "finalize")
+                        if component == extension:
+                            self.assertEqual(job["with"]["extension"], extension)
+                            self.assertIs(job["with"]["publish_alpha_feed"], False)
+                        else:
+                            self.assertIs(job["with"]["publish_ota"], False)
                 self.assertEqual(
-                    build["env"]["BROWSERCLAW_ONBOARD_RESOURCE_VERSION"],
-                    "${{ needs.reserve.outputs.onboarding_version }}",
+                    set(jobs["verify-components"]["needs"]),
+                    {
+                        "transaction",
+                        f"prepare-{server}",
+                        f"prepare-{extension}",
+                    },
                 )
-
-    def test_nightlies_setup_ci_keychain_before_build_and_cleanup_always(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            steps = workflow["jobs"]["build"]["steps"]
-            setup_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == "Import macOS signing certificate"
-            )
-            build_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == config["build_step"]
-            )
-            cleanup_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == "Clean up macOS signing keychain"
-            )
-            upload_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == "Upload DMG artifact"
-            )
-            setup = steps[setup_index]
-            build = steps[build_index]
-            cleanup = steps[cleanup_index]
-
-            with self.subTest(workflow=workflow_name):
-                self.assertLess(setup_index, build_index)
-                self.assertLess(build_index, cleanup_index)
-                self.assertLess(cleanup_index, upload_index)
-                self.assertEqual(setup["id"], "macos_signing")
-                self.assertIn("macos-signing-keychain.sh setup", setup["run"])
-                for name in (
-                    "MACOS_CERTIFICATE_NAME",
-                    "MACOS_CERTIFICATE_P12",
-                    "MACOS_CERTIFICATE_PWD",
-                    "MACOS_KEYCHAIN_PASSWORD",
+                verify = self.named_step(
+                    workflow,
+                    "verify-components",
+                    "Verify source and version identities",
+                )["run"]
+                self.assertIn('test "$SERVER_SHA" = "$SOURCE_SHA"', verify)
+                self.assertIn('test "$EXTENSION_SHA" = "$SOURCE_SHA"', verify)
+                self.assertIn(f"needs.transaction.outputs.{server_pin}", verify)
+                self.assertIn(f"needs.transaction.outputs.{extension_pin}", verify)
+                build = jobs[build_name]
+                self.assertEqual(
+                    set(build["needs"]), {"transaction", "verify-components"}
+                )
+                self.assertEqual(
+                    build["uses"],
+                    "./.github/workflows/reusable-build-macos-nightly.yml",
+                )
+                self.assertEqual(build["with"]["product"], product)
+                for input_name, output_name in (
+                    ("source_sha", "source_sha"),
+                    ("reservation_sha", "reservation_sha"),
+                    ("state_ref", "state_ref"),
+                    ("browser_version", "browser_version"),
+                    ("server_version", server_pin),
+                    ("extension_version", extension_pin),
+                    ("onboarding_version", onboarding_pin),
                 ):
-                    self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
+                    self.assertEqual(
+                        build["with"][input_name],
+                        f"${{{{ needs.transaction.outputs.{output_name} }}}}",
+                    )
+                self.assertNotIn("state_sha", build["with"])
+                ota = jobs[ota_name]
                 self.assertEqual(
-                    build["env"]["MACOS_KEYCHAIN_PATH"],
-                    "${{ steps.macos_signing.outputs.keychain_path }}",
+                    ota["uses"], "./.github/workflows/publish-server-ota.yml"
                 )
                 self.assertEqual(
-                    build["env"]["MACOS_CERTIFICATE_NAME"],
-                    "${{ steps.macos_signing.outputs.codesign_identity }}",
+                    set(ota["needs"]), {"transaction", f"finalize-{server}"}
                 )
-                self.assertEqual(cleanup["if"], "always()")
+                self.assertEqual(ota["with"]["product"], product)
                 self.assertEqual(
-                    cleanup["env"]["MACOS_SIGNING_STATE_PATH"],
-                    "${{ steps.macos_signing.outputs.state_path }}",
+                    ota["with"]["snapshot_path"], f"updates/server/{snapshot}"
                 )
-                self.assertIn("macos-signing-keychain.sh", cleanup["run"])
-                self.assertIn(" cleanup", cleanup["run"])
+                self.assertEqual(ota["with"]["state_owner"], "suite")
+                self.assertEqual(
+                    ota["permissions"], {"contents": "write", "pull-requests": "write"}
+                )
+                self.assertEqual(
+                    set(jobs["publish"]["needs"]),
+                    {
+                        "transaction",
+                        build_name,
+                        f"finalize-{server}",
+                        f"finalize-{extension}",
+                        ota_name,
+                    },
+                )
+                self.assertEqual(
+                    set(jobs["notify-failure"]["needs"]), set(jobs) - {"notify-failure"}
+                )
 
-    def test_nightlies_build_inside_disposable_chromium_workspace(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            steps = workflow["jobs"]["build"]["steps"]
-            indexes = {
-                step.get("name"): index
-                for index, step in enumerate(steps)
-                if "name" in step
-            }
-            setup = steps[indexes["Setup disposable Chromium workspace"]]
-            build = steps[indexes[config["build_step"]]]
-            workspace_cleanup = steps[
-                indexes["Clean up disposable Chromium workspace"]
-            ]
-            keychain_cleanup = steps[indexes["Clean up macOS signing keychain"]]
-
-            with self.subTest(workflow=workflow_name):
-                self.assertLess(
-                    indexes["Setup disposable Chromium workspace"],
-                    indexes[config["build_step"]],
-                )
-                self.assertLess(
-                    indexes[config["build_step"]],
-                    indexes["Clean up disposable Chromium workspace"],
-                )
-                self.assertLess(
-                    indexes["Clean up disposable Chromium workspace"],
-                    indexes["Clean up macOS signing keychain"],
-                )
-                self.assertEqual(setup["id"], "chromium_workspace")
-                self.assertEqual(setup["shell"], "bash")
+    def test_one_locked_job_merges_then_publishes_scoped_artifacts_and_feeds(self):
+        for product, (_, _, extension, _, _, _, snapshot) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                publish = workflow["jobs"]["publish"]
                 self.assertEqual(
-                    setup["working-directory"],
-                    "${{ steps.build_inputs.outputs.browseros_repo }}",
+                    publish["concurrency"],
+                    {
+                        "group": "release-feed-snapshots",
+                        "cancel-in-progress": False,
+                        "queue": "max",
+                    },
                 )
-                self.assertIn("macos-chromium-workspace.sh setup", setup["run"])
+                self.assertEqual(
+                    publish["permissions"],
+                    {"contents": "write", "pull-requests": "write"},
+                )
+                self.assertEqual(
+                    publish["steps"][0]["with"]["ref"],
+                    "${{ needs.transaction.outputs.source_sha }}",
+                )
+                names = (
+                    "Recover product transaction",
+                    "Compose snapshots from current main",
+                    "Render shared extension feeds with the selected product pin",
+                    "Reconcile and merge product state",
+                    "Verify merged transaction and restore current committed feeds",
+                    "Publish immutable signed browser artifact",
+                    "Publish current committed product feeds",
+                    "Reconcile product rolling nightly release",
+                )
+                steps = [self.named_step(workflow, "publish", name) for name in names]
+                indexes = [publish["steps"].index(step) for step in steps]
+                self.assertEqual(indexes, sorted(indexes))
+                (
+                    recover,
+                    baseline,
+                    render,
+                    merge,
+                    committed,
+                    artifact,
+                    feeds,
+                    rolling,
+                ) = steps
+                for step in (recover, merge, committed):
+                    self.assertIn(f"--product {product}", step["run"])
+                    self.assertIn('--source-sha "$SOURCE_SHA"', step["run"])
+                for step in (baseline, render, merge):
+                    self.assertEqual(
+                        step["if"], "steps.recovery.outputs.state == 'open'"
+                    )
+                self.assertIn("open|merged)", recover["run"])
+                self.assertIn(".reservation_sha", recover["run"])
                 self.assertIn(
-                    "${{ steps.build_inputs.outputs.chromium_src }}",
-                    setup["run"],
+                    'git restore --source="$BASE_SHA" --worktree', baseline["run"]
+                )
+                self.assertIn(
+                    'git merge-base --is-ancestor "$SOURCE_SHA" "$BASE_SHA"',
+                    baseline["run"],
+                )
+                self.assertNotIn("git checkout", baseline["run"])
+                self.assertEqual(render["run"].count("--set"), 1)
+                self.assertIn(f'--set "{extension}=$EXTENSION_VERSION"', render["run"])
+                self.assertIn(
+                    '--baseline-root "$GITHUB_WORKSPACE/updates"', render["run"]
+                )
+                self.assertIn('--state-base-sha "$BASE_SHA"', merge["run"])
+                self.assertIn('--state-root "$GITHUB_WORKSPACE"', merge["run"])
+                self.assertIn(f'products: ["{product}"]', merge["run"])
+                self.assertIn("release suite merge", merge["run"])
+                for token in (
+                    'test "$(jq -r \'.state\' "$record")" = "merged"',
+                    'test "$(jq -r \'.merge_sha\' "$record")" = "$merge_sha"',
+                    'git merge-base --is-ancestor "$merge_sha" "$current_main"',
+                    'git restore --source="$current_main" --worktree',
+                ):
+                    self.assertIn(token, committed["run"])
+                self.assertNotIn('git restore --source="$merge_sha"', committed["run"])
+                own_paths = {
+                    "updates/extensions/bundled-manifest.xml",
+                    "updates/extensions/extensions.alpha.json",
+                    "updates/extensions/update-manifest.alpha.xml",
+                    f"updates/server/{snapshot}",
+                }
+                for step in (baseline, committed):
+                    for path in own_paths:
+                        self.assertIn(path, step["run"])
+                    sibling = (
+                        "appcast-claw-server.alpha.xml"
+                        if product == "browseros"
+                        else "appcast-server.alpha.xml"
+                    )
+                    self.assertNotIn(sibling, step["run"])
+                self.assertEqual(artifact["run"].count("publish-browser-artifact"), 1)
+                self.assertIn(f"--product {product}", artifact["run"])
+                self.assertIn(
+                    f'--artifact-root "$RUNNER_TEMP/nightly-{product}"', artifact["run"]
+                )
+                for path in own_paths:
+                    self.assertIn(path.removeprefix("updates/"), feeds["run"])
+                self.assertNotIn("--allow-downgrade", render["run"] + feeds["run"])
+                self.assertEqual(rolling["run"].count("reconcile-rolling-release"), 1)
+                self.assertIn(f"--tag nightly-{product}", rolling["run"])
+                self.assertIn('--source-sha "$SOURCE_SHA"', rolling["run"])
+                self.assertIn('--browser-version "$VERSION"', rolling["run"])
+                self.assertNotIn("gh release delete", rolling["run"])
+                downloads = [
+                    step
+                    for step in publish["steps"]
+                    if str(step.get("uses", "")).startswith(
+                        "actions/download-artifact@"
+                    )
+                ]
+                self.assertEqual(len(downloads), 2)
+                self.assertEqual(
+                    downloads[0]["with"]["name"],
+                    f"${{{{ needs.build-{product}.outputs.artifact_name }}}}",
                 )
                 self.assertEqual(
-                    build["env"]["CHROMIUM_SRC"],
-                    "${{ steps.chromium_workspace.outputs.chromium_src }}",
+                    downloads[1]["with"]["name"], f"server-ota-snapshot-{product}"
                 )
-                self.assertEqual(workspace_cleanup["if"], "always()")
                 self.assertEqual(
-                    workspace_cleanup["env"]["MACOS_CHROMIUM_WORKSPACE_STATE_PATH"],
-                    "${{ steps.chromium_workspace.outputs.state_path }}",
+                    downloads[1]["if"], "steps.recovery.outputs.state == 'open'"
                 )
-                self.assertIn("macos-chromium-workspace.sh", workspace_cleanup["run"])
-                self.assertIn(" cleanup", workspace_cleanup["run"])
-                self.assertEqual(keychain_cleanup["if"], "always()")
 
-    def test_nightlies_publish_rolling_release_after_the_build(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            steps = workflow["jobs"]["build"]["steps"]
-            text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
-            rolling = next(
-                step
-                for step in steps
-                if step.get("name", "").startswith("Update rolling")
-            )
-            with self.subTest(workflow=workflow_name):
-                self.assertIn(config["tag"], rolling["run"])
-                self.assertIn("gh release create", rolling["run"])
-                self.assertIn("actions/upload-artifact@v7", text)
-                self.assertNotIn("Cargo.lock", text)
-                self.assertNotIn("bun.lock", text)
-                self.assertIn("Build commit: \\`$SOURCE_SHA\\`", text)
+    def test_product_nightly_changes_trigger_build_system_tests(self):
+        workflow = self.load_workflow("bos-build-tests.yml")
+        paths = workflow.get("on", workflow.get(True))["pull_request"]["paths"]
+        for filename in (
+            "nightly-macos-browseros.yml",
+            "nightly-macos-browserclaw.yml",
+            "reusable-build-macos-nightly.yml",
+        ):
+            self.assertIn(f".github/workflows/{filename}", paths)
 
-    def test_nightlies_remove_stale_dmgs_before_building(self):
-        for workflow_name, config in self.NIGHTLIES.items():
-            workflow = self.load_workflow(workflow_name)
-            steps = workflow["jobs"]["build"]["steps"]
-            cleanup_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == "Remove stale nightly DMGs"
-            )
-            build_index = next(
-                index
-                for index, step in enumerate(steps)
-                if step.get("name") == config["build_step"]
-            )
-            with self.subTest(workflow=workflow_name):
-                self.assertLess(cleanup_index, build_index)
-                self.assertIn("-delete", steps[cleanup_index]["run"])
+        release_checks = self.load_workflow("test.yml")
+        release_paths = release_checks.get("on", release_checks.get(True))["pull_request"]["paths"]
+        self.assertIn(".github/workflows/reusable-build-macos-nightly.yml", release_paths)
 
-    def test_version_reservation_precedes_each_nightly_build(self):
-        for workflow_name in self.NIGHTLIES:
-            workflow = self.load_workflow(workflow_name)
-            jobs = workflow["jobs"]
-            build = jobs["build"]
-            reserve = jobs["reserve"]
-            version = next(
-                step
-                for step in build["steps"]
-                if step.get("name") == "Verify reserved browser version"
-            )
-            with self.subTest(workflow=workflow_name):
-                self.assertIn("bump_version.py --mode none", version["run"])
-                self.assertIn('test "$version" = "$EXPECTED_VERSION"', version["run"])
-                self.assertEqual(
-                    build["outputs"]["version"], "${{ steps.version.outputs.version }}"
-                )
-                self.assertEqual(reserve["needs"], "preflight")
-
-        reserve_workflow = self.load_workflow("reserve-nightly-browser-version.yml")
+    def test_internal_builder_uses_reservation_and_frozen_artifact_source(self):
+        workflow = self.load_workflow("reusable-build-macos-nightly.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        self.assertEqual(workflow["name"], "Reusable: Build macOS nightly")
+        self.assertEqual(set(triggers), {"workflow_call"})
+        self.assertNotIn("workflow_dispatch", triggers)
         self.assertEqual(
-            reserve_workflow["jobs"]["reserve"]["concurrency"],
+            set(triggers["workflow_call"]["inputs"]),
             {
-                "group": "nightly-browser-version-reservation",
-                "cancel-in-progress": False,
-                "queue": "max",
+                "product",
+                "state_ref",
+                "source_sha",
+                "reservation_sha",
+                "browser_version",
+                "server_version",
+                "extension_version",
+                "onboarding_version",
             },
         )
-        reserve_step = next(
-            step
-            for step in reserve_workflow["jobs"]["reserve"]["steps"]
-            if step.get("name") == "Reserve the next version on main"
+        job = workflow["jobs"]["build"]
+        self.assertEqual(
+            job["concurrency"],
+            {"group": "macos-build", "cancel-in-progress": False, "queue": "max"},
         )
-        self.assertEqual(reserve_step["env"]["GH_TOKEN"], "${{ github.token }}")
-        for token in (
-            'git merge-base --is-ancestor "$TRIGGER_SHA" origin/main',
-            "bump_version.py --mode offset+build",
-            "gh pr create",
-            "merge-release-pr.sh",
-            "'.mergeCommit.oid // \"\"'",
-            'test "$merged_version" = "$version"',
-            "onboarding_version=\"$(jq -er '.version' packages/browseros-agent/apps/claw-onboard/package.json)\"",
-            'echo "onboarding_version=$onboarding_version"',
-            "for attempt in 1 2 3 4 5",
+        sync = self.named_step(
+            workflow, "build", "Sync build repo to transaction reservation"
+        )
+        build = self.named_step(workflow, "build", "Build signed nightly")
+        text = (WORKFLOW_DIR / "reusable-build-macos-nightly.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("refs/pull/[1-9][0-9]*/head", sync["run"])
+        self.assertIn('"+$STATE_REF:$state_remote_ref"', sync["run"])
+        self.assertIn('git checkout --detach "$RESERVATION_SHA"', sync["run"])
+        self.assertIn(
+            'test "$(git rev-parse "${RESERVATION_SHA}^")" = "$SOURCE_SHA"',
+            sync["run"],
+        )
+        self.assertIn(
+            'git merge-base --is-ancestor "$RESERVATION_SHA" "$state_remote_ref"',
+            sync["run"],
+        )
+        self.assertNotIn("STATE_SHA", text)
+        self.assertEqual(
+            build["env"]["BROWSEROS_BUILD_RESERVATION_SHA"],
+            "${{ inputs.reservation_sha }}",
+        )
+        self.assertEqual(build["env"]["BROWSEROS_DEFER_R2_UPLOAD"], "1")
+        self.assertEqual(
+            build["env"]["ONBOARDING_RESOURCE_VERSION"],
+            "${{ inputs.onboarding_version }}",
+        )
+        self.assertIn(
+            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
+            triggers["workflow_call"]["secrets"],
+        )
+        self.assertIn(
+            "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
+            triggers["workflow_call"]["secrets"],
+        )
+        setup = self.named_step(workflow, "build", "Import macOS signing certificate")
+        self.assertEqual(
+            setup["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64"],
+            "${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}",
+        )
+        self.assertEqual(
+            setup["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64"],
+            "${{ secrets.PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64 }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}",
+        )
+        self.assertEqual(
+            build["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH"],
+            "${{ steps.macos_signing.outputs.browserclaw_passkey_profile_path }}",
+        )
+        self.assertNotIn("BROWSERCLAW_ONBOARD_RESOURCE_VERSION", build["env"])
+        for secret in (
+            "R2_ACCESS_KEY_ID",
+            "R2_ACCOUNT_ID",
+            "R2_BUCKET",
+            "R2_SECRET_ACCESS_KEY",
         ):
-            self.assertIn(token, reserve_step["run"])
-        triggers = reserve_workflow.get("on", reserve_workflow.get(True))
+            self.assertNotIn(secret, triggers["workflow_call"].get("secrets", {}))
+            self.assertNotIn(secret, build["env"])
         self.assertEqual(
-            triggers["workflow_call"]["outputs"]["onboarding_version"]["value"],
-            "${{ jobs.reserve.outputs.onboarding_version }}",
+            build["env"]["BROWSEROS_BUILD_SOURCE_SHA"],
+            "${{ inputs.source_sha }}",
         )
-        self.assertNotIn('git push origin "HEAD:refs/heads/main"', reserve_step["run"])
-        self.assertEqual(
-            reserve_workflow["permissions"],
-            {"contents": "write", "pull-requests": "write"},
-        )
-        merge_helper = (
-            REPO_ROOT / "packages/browseros-agent/scripts/release/merge-release-pr.sh"
-        ).read_text(encoding="utf-8")
-        self.assertIn('--match-head-commit "$expected_head"', merge_helper)
-        self.assertLess(
-            merge_helper.index('gh "${merge_args[@]}"'),
-            merge_helper.index('gh "${merge_args[@]}" --auto'),
-        )
-
-    def test_nightly_profile_downloads_published_resources_once(self):
-        from bos_build.core.planner import load_profile, plan
-
-        profile = load_profile(
-            REPO_ROOT / "packages/browseros/bos_build/profiles/nightly-macos.yaml"
-        ).switches
-        for product in ("browseros", "browserclaw"):
-            switches = replace(profile, product=product).resolved()
-            steps = plan(switches, "arm64", "macos")
-            with self.subTest(product=product):
-                self.assertEqual(steps.count("download_resources"), 1)
-                self.assertNotIn("prepare_common_resources", steps)
-                self.assertNotIn("prepare_server_resources", steps)
-
-    def test_nightly_changes_trigger_build_system_tests(self):
-        workflow = self.load_workflow("bos-build-tests.yml")
-        triggers = workflow.get("on", workflow.get(True))
-        paths = triggers["pull_request"]["paths"]
-        self.assertIn(".github/workflows/nightly-browseros.yml", paths)
-        self.assertIn(".github/workflows/nightly-browserclaw.yml", paths)
-        self.assertIn(".github/workflows/reserve-nightly-browser-version.yml", paths)
-
+        for token in (
+            "--profile nightly-macos",
+            '--product "$PRODUCT"',
+            "--arch arm64",
+            "--resource-mode published",
+        ):
+            self.assertIn(token, build["run"])
+        self.assertIn("Clean up disposable Chromium workspace", text)
+        self.assertIn("Clean up macOS signing keychain", text)
+        self.assertIn("actions/upload-artifact@v7", text)
+        self.assertIn("release.json", text)
+        self.assertNotIn("gh release create", text)
 
 @unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
 class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
@@ -1643,6 +1979,7 @@ class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
         self.github_env = self.root / "github_env"
         self.github_output = self.root / "github_output"
         self.git_log = self.root / "git.log"
+        self.git_clean_log = self.root / "git-clean.log"
         self.cp_log = self.root / "cp.log"
         self.version_file = self.root / "CHROMIUM_VERSION"
         self.version_file.write_text(
@@ -1703,6 +2040,14 @@ if [ "${1:-}" = "-C" ]; then
 fi
 cmd="${1:-}"
 shift || true
+repo="${repo:-.}"
+repo_was_cleaned() {
+  [ -f "$GIT_CLEAN_LOG" ] || return 1
+  while IFS= read -r cleaned_repo; do
+    [ "$cleaned_repo" = "$repo" ] && return 0
+  done < "$GIT_CLEAN_LOG"
+  return 1
+}
 case "$cmd" in
   rev-parse)
     target="${1:-}"
@@ -1719,6 +2064,7 @@ case "$cmd" in
     esac
     ;;
   status)
+    repo_was_cleaned && exit 0
     if [ -n "${GIT_DIRTY_REPO:-}" ]; then
       if [ "$repo" = "$GIT_DIRTY_REPO" ]; then
         printf '%b' "${GIT_DIRTY_STATUS:- M nested-change\\n}"
@@ -1726,6 +2072,9 @@ case "$cmd" in
     else
       printf '%b' "${GIT_STATUS:-}"
     fi
+    ;;
+  clean)
+    printf '%s\\n' "$repo" >> "$GIT_CLEAN_LOG"
     ;;
 esac
 """
@@ -1763,6 +2112,7 @@ esac
                 "BROWSEROS_CHROMIUM_VERSION_FILE": str(self.version_file),
                 "CP_LOG": str(self.cp_log),
                 "GIT_HEAD": self.head,
+                "GIT_CLEAN_LOG": str(self.git_clean_log),
                 "GIT_LOG": str(self.git_log),
                 "GITHUB_ENV": str(self.github_env),
                 "GITHUB_OUTPUT": str(self.github_output),
@@ -1876,7 +2226,7 @@ esac
         self.assertTrue(Path(self._outputs()["workspace_root"]).exists())
         self.assertTrue(self.base_root.exists())
 
-    def test_setup_reaps_stale_workspaces_before_dirty_base_failure(self):
+    def test_setup_reaps_stale_workspaces_before_repairing_dirty_base(self):
         parent = self._workspace_parent()
         parent.mkdir()
         stale = self._workspace_root("old-1")
@@ -1890,10 +2240,9 @@ esac
             GIT_STATUS=" M chrome/app/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(stale.exists())
-        self.assertFalse(self._workspace_root().exists())
+        self.assertTrue(self._workspace_root().exists())
         self.assertTrue(self.base_root.exists())
 
     def test_cleanup_ignores_unsafe_state_target(self):
@@ -1957,9 +2306,7 @@ esac
 
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self._workspace_root().exists())
-        self.assertFalse(
-            self._state_path().exists()
-        )
+        self.assertFalse(self._state_path().exists())
         cp_lines = self.cp_log.read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.startswith("-cR ") for line in cp_lines))
         self.assertFalse(any(line.startswith("-R ") for line in cp_lines))
@@ -1971,29 +2318,27 @@ esac
         self.assertIn("does not match pinned", result.stderr + result.stdout)
         self.assertFalse(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_tracked_changes(self):
+    def test_setup_repairs_base_with_tracked_changes(self):
         result = self._run_helper(
             "setup",
             self.base_src,
             GIT_STATUS=" M chrome/app/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_untracked_changes(self):
+    def test_setup_repairs_base_with_untracked_changes(self):
         result = self._run_helper(
             "setup",
             self.base_src,
             GIT_STATUS="?? chrome/browser/browseros/generated_resources.grd\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_nested_gclient_repo_has_changes(self):
+    def test_setup_repairs_nested_gclient_repo_with_changes(self):
         nested_repo = self.base_src / "third_party" / "v8"
         nested_repo.mkdir(parents=True)
         (nested_repo / ".git").mkdir()
@@ -2005,20 +2350,18 @@ esac
             GIT_DIRTY_STATUS=" M src/builtins/generated.cc\n",
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(str(nested_repo.resolve()), result.stderr + result.stdout)
-        self.assertIn("tracked or untracked changes", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertTrue(self._workspace_root().exists())
 
-    def test_setup_fails_when_base_has_browseros_output_dirs(self):
+    def test_setup_removes_browseros_output_dirs_from_base(self):
         out_dir = self.base_src / "out" / "Default_browseros_arm64"
         out_dir.mkdir(parents=True)
 
         result = self._run_helper("setup", self.base_src)
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("BrowserOS output state", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertFalse(out_dir.exists())
+        self.assertTrue(self._workspace_root().exists())
 
 
 @unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
@@ -2172,6 +2515,8 @@ fi
         smoke_path = self.runner_temp / "browseros-ci-codesign-smoke-123-4"
 
         self.assertEqual(outputs["codesign_identity"], self.identity_sha1)
+        self.assertEqual(outputs["browseros_passkey_profile_path"], "")
+        self.assertEqual(outputs["browserclaw_passkey_profile_path"], "")
         self.assertTrue(keychain_path.exists())
         self.assertTrue(state_path.exists())
         self.assertFalse(cert_path.exists())
@@ -2206,6 +2551,38 @@ fi
         self.assertIn(f"--verify --verbose=2 {smoke_path}", codesign_log)
         self.assertFalse(keychain_path.exists())
         self.assertFalse(state_path.exists())
+
+    def test_setup_decodes_both_passkey_profiles_and_cleanup_removes_them(self):
+        result = self._run_helper(
+            "setup",
+            PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64="cHJvZmlsZS1ieXRlcw==",
+            PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64="Y2xhdy1wcm9maWxlLWJ5dGVz",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        outputs = self._outputs()
+        browseros_profile_path = Path(outputs["browseros_passkey_profile_path"])
+        browserclaw_profile_path = Path(outputs["browserclaw_passkey_profile_path"])
+        self.assertEqual(browseros_profile_path.read_bytes(), b"profile-bytes")
+        self.assertEqual(browserclaw_profile_path.read_bytes(), b"claw-profile-bytes")
+        self.assertEqual(browseros_profile_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(browserclaw_profile_path.stat().st_mode & 0o777, 0o600)
+        env_lines = self.github_env.read_text(encoding="utf-8").splitlines()
+        self.assertIn(
+            f"PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH={browseros_profile_path}",
+            env_lines,
+        )
+        self.assertIn(
+            f"PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH={browserclaw_profile_path}",
+            env_lines,
+        )
+
+        cleanup = self._run_helper(
+            "cleanup",
+            MACOS_SIGNING_STATE_PATH=outputs["state_path"],
+        )
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
+        self.assertFalse(browseros_profile_path.exists())
+        self.assertFalse(browserclaw_profile_path.exists())
 
     def test_setup_uses_fingerprint_when_common_name_is_duplicated(self):
         result = self._run_helper("setup", CODESIGN_REJECT_COMMON_NAME="1")
@@ -2302,7 +2679,9 @@ fi
     def test_setup_first_cleans_previous_recorded_state(self):
         old_keychain_path = self.runner_temp / "browseros-ci-signing-old-1.keychain-db"
         old_cert_path = self.runner_temp / "browseros-signing-cert-old-1.p12"
-        old_originals_path = self.runner_temp / "browseros-ci-original-keychains-old-1.txt"
+        old_originals_path = (
+            self.runner_temp / "browseros-ci-original-keychains-old-1.txt"
+        )
         old_state_path = self.runner_temp / "browseros-ci-signing-keychain-state.env"
         old_original = self.root / "old-login.keychain-db"
         old_keychain_path.write_text("old-keychain")
@@ -2379,6 +2758,18 @@ class ReleaseDocumentationTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.release)
 
+    def test_readme_lists_both_independent_onboarding_bundles(self):
+        for token in (
+            "apps/app-onboard/package.json",
+            "release-app-onboard.yml",
+            "app-onboard/v*",
+            "apps/claw-onboard/package.json",
+            "release-claw-onboard.yml",
+            "claw-onboard/v*",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.readme)
+
     def test_runbooks_state_native_host_and_publication_boundaries(self):
         for token in (
             "Linux x64",
@@ -2393,7 +2784,54 @@ class ReleaseDocumentationTest(unittest.TestCase):
         self.assertIn("`queue: max`", self.nightly)
         self.assertIn("Published mode deliberately retains", self.warp)
 
-    def test_primary_docs_do_not_describe_retired_resource_staging(self):
+    def test_nightly_runbook_covers_product_transactions_and_family_cutover(self):
+        for token in (
+            ".github/workflows/nightly-macos-browseros.yml",
+            ".github/workflows/nightly-macos-browserclaw.yml",
+            ".github/workflows/reusable-build-macos-nightly.yml",
+            "nightly-<product>-<source-sha>",
+            "Source SHA",
+            "Reservation SHA",
+            "State SHA",
+            "Merge SHA",
+            "refs/pull/<PR_NUMBER>/head",
+            "created as a draft",
+            "Open, closed, and merged canonical suite",
+            "--baseline-root",
+            "--state-base-sha",
+            "Re-run failed jobs",
+            "conditionally creates",
+            "before exposing any mutable feeds",
+            "superseded/no-op",
+            "partial draft resumes",
+            "--allow-downgrade",
+            "release-suite",
+            "Historical runs",
+            "omitting",
+            "--product",
+            "Historical standalone extension-feed runs",
+            "current committed feed files",
+            "Rewriting `main` history remains unsupported",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.nightly)
+        self.assertLess(
+            self.nightly.index(
+                "conditionally create or verify its immutable DMG and receipt"
+            ),
+            self.nightly.index(
+                "publish current committed feeds and reconcile its rolling prerelease"
+            ),
+        )
+        self.assertIn("Signed nightlies use independent product transactions", self.release)
+        for token in (
+            "always check out `reservation_sha`",
+            "new whole-run invocation that finds the transaction already\nmerged fails closed",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.release)
+
+    def test_primary_docs_do_not_describe_retired_release_behavior(self):
         text = "\n".join((self.readme, self.release, self.nightly, self.warp))
         for token in (
             "bundle_local_extensions",
@@ -2402,6 +2840,8 @@ class ReleaseDocumentationTest(unittest.TestCase):
             "Stage BrowserOS nightly resources",
             "claw-server-rust-local.sh",
             "BROWSEROS_NIGHTLY_REF",
+            "build the exact transaction-branch head",
+            "verify it still resolves to the recorded state\nSHA",
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
@@ -2470,6 +2910,55 @@ class ChromiumGitRunbookTest(unittest.TestCase):
         self.assertIn("index flags", troubleshooting)
         self.assertIn("`--repair-cached-depot-tools`", troubleshooting)
         self.assertIn("`v2`", troubleshooting)
+
+
+class RepairUpdateFeedWorkflowTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        path = WORKFLOW_DIR / "repair-update-feed.yml"
+        cls.workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_dispatch_only_selects_registered_appcasts(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+        inputs = triggers["workflow_dispatch"]["inputs"]
+        self.assertEqual(
+            inputs["feed"]["options"],
+            [feed.key for feed in all_feeds() if feed.kind in ("browser", "server")],
+        )
+        self.assertFalse(inputs["publish"]["default"])
+        self.assertFalse(inputs["repair_invalid_live"]["default"])
+        self.assertNotIn("allow_downgrade", inputs)
+
+    def test_uses_tracked_default_branch_and_guarded_publisher(self):
+        self.assertEqual(
+            self.workflow["concurrency"],
+            {
+                "group": "release-feed-snapshots",
+                "cancel-in-progress": False,
+                "queue": "max",
+            },
+        )
+        job = self.workflow["jobs"]["repair"]
+        self.assertEqual(job["permissions"], {"contents": "read"})
+        checkout = next(
+            step
+            for step in job["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+        )
+        self.assertEqual(
+            checkout["with"]["ref"],
+            "${{ github.event.repository.default_branch || 'main' }}",
+        )
+        publish = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Publish tracked appcast"
+        )["run"]
+        self.assertIn('args=("$FEED")', publish)
+        self.assertIn("args+=(--repair-invalid-live)", publish)
+        self.assertIn("args+=(--publish)", publish)
+        self.assertIn('release feeds publish-local "${args[@]}"', publish)
+        self.assertNotIn("--allow-downgrade", publish)
 
 
 if __name__ == "__main__":

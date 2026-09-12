@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
 from ..lib.versions import load_semantic_version
+from ..products.resource_sources import source_resources_for_product
 from .components import (
     AllocationRecord,
     component_by_id,
@@ -189,9 +190,10 @@ def _validate_recovered(
     if record.default_branch != request.default_branch or record.branch != branch:
         raise ValueError("Recovered candidate branch metadata does not match")
     _validate_sha(record.candidate_sha, "candidate_sha")
+    source = source_resources_for_product(request.product)
     expected = {
         *(spec.id for spec in components_for_candidate(request.product)),
-        "claw-onboard",
+        source.onboarding_component,
     }
     if set(record.component_versions) != expected:
         raise ValueError("Recovered candidate component set is incomplete")
@@ -224,7 +226,12 @@ def ensure_candidate(
         allocations=backend.discover_allocations(request.product),
         candidate_id=branch,
     )
-    versions["claw-onboard"] = committed_versions["claw-onboard"]
+    # Onboarding releases independently, so a browser candidate freezes the
+    # committed product-owned version without allocating a new app version.
+    onboarding_component = source_resources_for_product(
+        request.product
+    ).onboarding_component
+    versions[onboarding_component] = committed_versions[onboarding_component]
     created = backend.create_candidate(
         request,
         branch,
@@ -545,6 +552,12 @@ class GitHubCandidateBackend:
         return matches[0] if matches else None
 
     def discover_allocations(self, product: str) -> Sequence[AllocationRecord]:
+        from .suite import (
+            GitHubSuiteBackend,
+            merge_suite_component_allocations,
+            suite_allocation_record_from_pull_request,
+        )
+
         specs = components_for_candidate(product)
         allocations: list[AllocationRecord] = []
         for tag in self._git("tag", "--list").splitlines():
@@ -592,31 +605,77 @@ class GitHubCandidateBackend:
                     )
                 )
 
-        for pull_request in list_pull_requests(self.repo, state="open"):
+        for pull_request in list_pull_requests(self.repo, state="all"):
             record = candidate_record_from_pull_request(pull_request, self.repo)
-            if record is None or record.product != product:
-                continue
-            self.validate_candidate(record)
-            for component, version in record.component_versions.items():
+            candidate_is_open = pull_request.get(
+                "state"
+            ) == "OPEN" and not pull_request.get("mergedAt")
+            if record is not None and record.product == product and candidate_is_open:
+                self.validate_candidate(record)
+                versions = record.component_versions
+                source_sha = record.candidate_sha
+                candidate_id = record.branch
+                suite_reservation = False
+                reusable = False
+            else:
+                suite = suite_allocation_record_from_pull_request(
+                    pull_request, self.repo
+                )
+                if suite is None:
+                    continue
+                product_components = {spec.id for spec in specs}
+                versions = {
+                    component: version
+                    for component, version in suite.component_versions.items()
+                    if component in product_components
+                }
+                source_sha = suite.source_sha
+                candidate_id = suite.branch
+                suite_reservation = True
+                reusable = suite.state == "open"
+            for component, version in versions.items():
+                if component not in {spec.id for spec in specs}:
+                    continue
                 allocations.append(
                     AllocationRecord(
                         component=component,
                         version=version,
                         kind="candidate",
-                        source_sha=record.candidate_sha,
-                        candidate_id=record.branch,
-                        reference=record.branch,
+                        source_sha=source_sha,
+                        candidate_id=candidate_id,
+                        reference=(
+                            component_by_id(component).tag_prefix + version
+                            if suite_reservation
+                            else candidate_id
+                        ),
+                        reusable=reusable,
+                        reuse_forbidden=suite_reservation and not reusable,
                     )
                 )
-        return tuple(allocations)
+
+        # The reservation branch is pushed before its draft PR is created. If
+        # the runner dies between those external writes, candidate allocation
+        # still has to burn the suite's exact component versions immediately.
+        suite_backend = GitHubSuiteBackend(
+            self.repo_root,
+            self.repo,
+            self.default_branch,
+            self.remote,
+        )
+        return merge_suite_component_allocations(
+            allocations,
+            suite_backend.discover_branch_reservations(),
+            [spec.id for spec in specs],
+        )
 
     def read_committed_versions(self, product: str) -> Mapping[str, str]:
         versions = {
             spec.id: read_component_version(self.repo_root, spec.id)
             for spec in components_for_candidate(product)
         }
-        versions["claw-onboard"] = read_component_version(
-            self.repo_root, "claw-onboard"
+        onboarding_component = source_resources_for_product(product).onboarding_component
+        versions[onboarding_component] = read_component_version(
+            self.repo_root, onboarding_component
         )
         return versions
 

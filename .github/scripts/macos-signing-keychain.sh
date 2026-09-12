@@ -29,6 +29,14 @@ owned_cert_path() {
   esac
 }
 
+owned_profile_path() {
+  case "$1" in
+    "$RUNNER_TEMP"/browseros-passkey-profile-*.provisionprofile) return 0 ;;
+    "$RUNNER_TEMP"/browserclaw-passkey-profile-*.provisionprofile) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 owned_keychains_file() {
   case "$1" in
     "$RUNNER_TEMP"/browseros-ci-original-keychains-*.txt) return 0 ;;
@@ -70,12 +78,17 @@ append_env() {
   fi
 }
 
-decode_certificate() {
-  local output="$1"
-  if printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$output" 2>/dev/null; then
+decode_base64_value() {
+  local value="$1"
+  local output="$2"
+  if printf '%s' "$value" | base64 --decode > "$output" 2>/dev/null; then
     return 0
   fi
-  printf '%s' "$MACOS_CERTIFICATE_P12" | base64 -D > "$output"
+  printf '%s' "$value" | base64 -D > "$output"
+}
+
+decode_certificate() {
+  decode_base64_value "$MACOS_CERTIFICATE_P12" "$1"
 }
 
 resolve_codesigning_identity() {
@@ -156,6 +169,14 @@ setup_keychain() {
 
   local run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
   local cert_path="$RUNNER_TEMP/browseros-signing-cert-$run_tag.p12"
+  local browseros_profile_path=""
+  local browserclaw_profile_path=""
+  if [ -n "${PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64:-}" ]; then
+    browseros_profile_path="$RUNNER_TEMP/browseros-passkey-profile-$run_tag.provisionprofile"
+  fi
+  if [ -n "${PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64:-}" ]; then
+    browserclaw_profile_path="$RUNNER_TEMP/browserclaw-passkey-profile-$run_tag.provisionprofile"
+  fi
   local keychain_path="$RUNNER_TEMP/browseros-ci-signing-$run_tag.keychain-db"
   local original_keychains_file="$RUNNER_TEMP/browseros-ci-original-keychains-$run_tag.txt"
   local listed_keychains_file="$RUNNER_TEMP/browseros-ci-listed-keychains-$run_tag.txt"
@@ -191,6 +212,8 @@ setup_keychain() {
 
   {
     printf 'cert_path=%s\n' "$cert_path"
+    printf 'browseros_profile_path=%s\n' "$browseros_profile_path"
+    printf 'browserclaw_profile_path=%s\n' "$browserclaw_profile_path"
     printf 'keychain_path=%s\n' "$keychain_path"
     printf 'original_default_keychain=%s\n' "$original_default_keychain"
     printf 'original_keychains_file=%s\n' "$original_keychains_file"
@@ -200,10 +223,27 @@ setup_keychain() {
   trap cleanup_after_setup_error ERR
 
   rm -f "$cert_path"
+  local profile_path
+  for profile_path in "$browseros_profile_path" "$browserclaw_profile_path"; do
+    if owned_profile_path "$profile_path"; then
+      rm -f "$profile_path"
+    fi
+  done
   security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
   rm -f "$keychain_path"
 
   decode_certificate "$cert_path"
+  # Each profile authorizes one exact App ID. Decode them to separate,
+  # runner-owned paths so a product can never accidentally consume its
+  # sibling's authorization document and cleanup can remove both reliably.
+  if [ -n "$browseros_profile_path" ]; then
+    decode_base64_value "$PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64" "$browseros_profile_path"
+    chmod 600 "$browseros_profile_path"
+  fi
+  if [ -n "$browserclaw_profile_path" ]; then
+    decode_base64_value "$PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64" "$browserclaw_profile_path"
+    chmod 600 "$browserclaw_profile_path"
+  fi
   security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
   security set-keychain-settings -lut 21600 "$keychain_path"
   security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$keychain_path"
@@ -232,8 +272,12 @@ setup_keychain() {
   append_env "${GITHUB_ENV:-}" MACOS_CERTIFICATE_NAME "$codesign_identity"
   append_env "${GITHUB_ENV:-}" MACOS_KEYCHAIN_PATH "$keychain_path"
   append_env "${GITHUB_ENV:-}" MACOS_SIGNING_STATE_PATH "$state_path"
+  append_env "${GITHUB_ENV:-}" PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH "$browseros_profile_path"
+  append_env "${GITHUB_ENV:-}" PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH "$browserclaw_profile_path"
   append_env "${GITHUB_OUTPUT:-}" codesign_identity "$codesign_identity"
   append_env "${GITHUB_OUTPUT:-}" keychain_path "$keychain_path"
+  append_env "${GITHUB_OUTPUT:-}" browseros_passkey_profile_path "$browseros_profile_path"
+  append_env "${GITHUB_OUTPUT:-}" browserclaw_passkey_profile_path "$browserclaw_profile_path"
   append_env "${GITHUB_OUTPUT:-}" state_path "$state_path"
   trap - ERR
 }
@@ -248,6 +292,8 @@ cleanup_keychain() {
   fi
 
   local cert_path=""
+  local browseros_profile_path=""
+  local browserclaw_profile_path=""
   local keychain_path=""
   local original_default_keychain=""
   local original_keychains_file=""
@@ -256,6 +302,8 @@ cleanup_keychain() {
   while IFS= read -r state_line; do
     case "$state_line" in
       cert_path=*) cert_path="${state_line#cert_path=}" ;;
+      browseros_profile_path=*) browseros_profile_path="${state_line#browseros_profile_path=}" ;;
+      browserclaw_profile_path=*) browserclaw_profile_path="${state_line#browserclaw_profile_path=}" ;;
       keychain_path=*) keychain_path="${state_line#keychain_path=}" ;;
       original_default_keychain=*) original_default_keychain="${state_line#original_default_keychain=}" ;;
       original_keychains_file=*) original_keychains_file="${state_line#original_keychains_file=}" ;;
@@ -288,6 +336,12 @@ cleanup_keychain() {
   if owned_cert_path "$cert_path"; then
     rm -f "$cert_path"
   fi
+  local profile_path
+  for profile_path in "$browseros_profile_path" "$browserclaw_profile_path"; do
+    if owned_profile_path "$profile_path"; then
+      rm -f "$profile_path"
+    fi
+  done
   if owned_smoke_path "$smoke_path"; then
     rm -f "$smoke_path"
   fi

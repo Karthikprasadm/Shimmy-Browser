@@ -185,7 +185,7 @@ describe('resolveAcpSpawnCommand', () => {
       '/c',
     ])
     expect(payload.argv[4]).toContain('npx')
-    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.0.2')
+    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.10.0')
     expect(payload.env.INITIAL_AGENT_MODE).toBe('agent-full-access')
   })
 
@@ -204,7 +204,7 @@ describe('resolveAcpSpawnCommand', () => {
     const payload = decodeEnvironmentPayload(out.argv[3])
     expect(payload.argv[0]).toBe('C:\\Windows\\System32\\cmd.exe')
     expect(payload.argv[4]).toContain(
-      '@agentclientprotocol/claude-agent-acp@^^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^^0.75.1',
     )
   })
 
@@ -215,5 +215,61 @@ describe('resolveAcpSpawnCommand', () => {
       resolveBundledBun: stubBunPresent,
     })
     expect(out?.argv.join('\n')).not.toContain('CODEX_HOME')
+  })
+})
+
+describe('resolveAcpSpawnCommand (custom)', () => {
+  const noLoginPath = () => undefined
+
+  it('runs a custom command as given, split into argv', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'npx -y @scope/my-agent-acp --stdio',
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['npx', '-y', '@scope/my-agent-acp', '--stdio'])
+  })
+
+  it('injects custom env at the process-launch boundary', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent',
+      spawnEnv: { MY_AGENT_KEY: 'secret' },
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.source).toBe('custom')
+    expect(out.argv).toEqual(['env', 'MY_AGENT_KEY=secret', 'my-agent'])
+  })
+
+  it('does not wrap the custom command in bundled-bun', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'my-agent --stdio',
+      resourcesDir: '/fake/resources',
+      resolveBundledBun: stubBunPresent,
+      platform: 'darwin',
+      resolveLoginShellPath: noLoginPath,
+    })
+    expect(out.argv).toEqual(['my-agent', '--stdio'])
+    expect(out.argv.join(' ')).not.toContain('--package')
+  })
+
+  it('prepends the login-shell PATH so profile-installed binaries resolve', () => {
+    const out = resolveAcpSpawnCommand({
+      agentType: 'custom',
+      customCommand: 'opencode acp',
+      env: { PATH: '/usr/bin' },
+      platform: 'darwin',
+      resolveLoginShellPath: () => '/opt/homebrew/bin:/usr/bin',
+    })
+    expect(out.argv).toEqual([
+      'env',
+      'PATH=/opt/homebrew/bin:/usr/bin',
+      'opencode',
+      'acp',
+    ])
   })
 })

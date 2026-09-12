@@ -24,6 +24,8 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
         "MACOS_CERTIFICATE_PWD",
         "MACOS_KEYCHAIN_PASSWORD",
         "POSTHOG_API_KEY",
+        "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
+        "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
         "PROD_MACOS_NOTARIZATION_PWD",
         "R2_SECRET_ACCESS_KEY",
         "SENTRY_AUTH_TOKEN",
@@ -82,9 +84,9 @@ class EnvConfig:
         return os.environ.get("BROWSERCLAW_SERVER_RESOURCE_VERSION")
 
     @property
-    def browserclaw_onboard_resource_version(self) -> Optional[str]:
-        """Exact BrowserClaw onboarding resource version for release builds."""
-        return os.environ.get("BROWSERCLAW_ONBOARD_RESOURCE_VERSION")
+    def onboarding_resource_version(self) -> Optional[str]:
+        """Exact product-selected onboarding version for release builds."""
+        return os.environ.get("ONBOARDING_RESOURCE_VERSION")
 
     @property
     def bundled_extensions_manifest_url(self) -> Optional[str]:
@@ -120,6 +122,16 @@ class EnvConfig:
     def macos_notarization_password(self) -> Optional[str]:
         """App-specific password for macOS notarization"""
         return os.environ.get("PROD_MACOS_NOTARIZATION_PWD")
+
+    @property
+    def macos_browseros_passkey_profile_path(self) -> Optional[str]:
+        """Developer ID profile authorizing BrowserOS platform passkeys."""
+        return os.environ.get("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH")
+
+    @property
+    def macos_browserclaw_passkey_profile_path(self) -> Optional[str]:
+        """Developer ID profile authorizing BrowserOS neo platform passkeys."""
+        return os.environ.get("PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH")
 
     @property
     def macos_keychain_password(self) -> Optional[str]:

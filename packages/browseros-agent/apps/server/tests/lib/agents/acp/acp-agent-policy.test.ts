@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import { buildAcpAgentPolicy } from '../../../../src/lib/agents/acp/acp-agent-policy'
+import { BROWSEROS_ACP_INSTRUCTIONS } from '../../../../src/lib/agents/acp/browseros-instructions'
 import type { AcpAgentDefinition } from '../../../../src/lib/agents/agent-types'
+import { BROWSEROS_TOOL_LEASE_HEADER } from '../../../../src/lib/browser-tool-lease'
 
 const SKILL = [
   '---',
@@ -73,6 +75,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-1',
       serverPort: 9001,
+      browserToolLeaseToken: 'lease-1',
+      readOnly: true,
       resourcesDir,
       browserosDir: '/state/browseros',
       browserContext: {
@@ -88,7 +92,7 @@ describe('buildAcpAgentPolicy', () => {
     expect(policy.cwd).toBe('/work/project')
     expect(policy.sessionKey).toBe('acp:claude-agent-id:conversation-1')
     expect(agentArgv(policy, 'claude')).toContain(
-      '@agentclientprotocol/claude-agent-acp@^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^0.75.1',
     )
     expect(policy.mcpServers.map((server) => server.name)).toEqual([
       'browseros',
@@ -97,16 +101,14 @@ describe('buildAcpAgentPolicy', () => {
     expect(policy.mcpServers[0]).toEqual({
       type: 'http',
       name: 'browseros',
-      url: 'http://127.0.0.1:9001/mcp',
+      url: 'http://127.0.0.1:9001/mcp?read_only=1',
       headers: {
-        'X-BrowserOS-Scope-Id': 'conversation-1',
-        'X-BrowserOS-Default-Window-Id': '42',
-        'X-BrowserOS-Managed-Mcp-Servers': 'Slack',
+        [BROWSEROS_TOOL_LEASE_HEADER]: 'lease-1',
       },
     })
     expect(policy.sessionOptions).toEqual({
       model: 'claude-opus-4-1',
-      systemPrompt: { append: SKILL },
+      systemPrompt: { append: BROWSEROS_ACP_INSTRUCTIONS },
     })
     expect(policy.fullAccessModeCandidates).toEqual(['bypassPermissions'])
   })
@@ -120,6 +122,8 @@ describe('buildAcpAgentPolicy', () => {
       }),
       conversationId: 'conversation-2',
       serverPort: 9002,
+      browserToolLeaseToken: 'lease-2',
+      readOnly: false,
       resourcesDir,
       browserosDir: '/state/browseros',
       browserContext: {
@@ -163,14 +167,15 @@ describe('buildAcpAgentPolicy', () => {
 
     await store.save(record)
     expect(await store.load(record.acpxRecordId)).toBeDefined()
+    // No workingDirectory set, so cwd defaults to the shared ACP workspace.
+    expect(policy.cwd).toBe('/state/browseros/agents/acp-workspace')
     expect(policy.sessionOptions).toEqual({})
     const renderedArgv = codexArgv.join('\n')
     expect(renderedArgv).not.toContain('CODEX_HOME')
     expect(renderedArgv).toContain('CODEX_CONFIG=')
     expect(renderedArgv).toContain('INITIAL_AGENT_MODE=agent-full-access')
-    expect(renderedArgv).toContain(
-      '"developer_instructions":"---\\nname: browseros',
-    )
+    expect(renderedArgv).toContain('"developer_instructions":"# BrowserOS')
+    expect(renderedArgv).toContain('browseros-neo')
     expect(renderedArgv).toContain('"model":"gpt-5.4"')
     expect(renderedArgv).toContain('"model_reasoning_effort":"high"')
     expect(renderedArgv).toContain('"browser@openai-bundled":{"enabled":false}')
@@ -181,5 +186,63 @@ describe('buildAcpAgentPolicy', () => {
       'agent-full-access',
       'full-access',
     ])
+  })
+
+  it('builds a custom agent policy from stored config', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('custom', {
+        id: 'custom-1',
+        name: 'My Agent',
+        modelId: 'gpt-x',
+        customConfig: {
+          command: 'npx -y @scope/my-agent-acp --stdio',
+          env: { MY_AGENT_KEY: 'secret' },
+          fullAccessModes: ['bypass'],
+          systemPromptAppend: 'Extra instructions.',
+        },
+      }),
+      conversationId: 'conversation-1',
+      serverPort: 9001,
+      browserToolLeaseToken: 'lease-3',
+      readOnly: false,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+    })
+
+    // Per-agent registry id, never a shared 'custom' key.
+    expect(policy.adapter).toBe('custom:custom-1')
+    const override = policy.agentRegistryOverrides['custom:custom-1']
+    if (!Array.isArray(override)) throw new Error('Expected custom argv')
+    expect(override.join(' ')).toContain('@scope/my-agent-acp')
+    // Custom env rides at the process-launch boundary.
+    expect(override.join(' ')).toContain('MY_AGENT_KEY=secret')
+    expect(policy.sessionOptions).toEqual({
+      model: 'gpt-x',
+      systemPrompt: { append: 'Extra instructions.' },
+    })
+    expect(policy.fullAccessModeCandidates).toEqual(['bypass'])
+    // BrowserOS MCP is injected regardless of agent type.
+    expect(policy.mcpServers[0]?.name).toBe('browseros')
+  })
+
+  it('gives a custom agent no full-access modes when none are configured', async () => {
+    const resourcesDir = await createResourcesDir()
+    const policy = await buildAcpAgentPolicy({
+      agent: agent('custom', {
+        id: 'custom-2',
+        name: 'Bare Agent',
+        customConfig: { command: 'bare-agent' },
+      }),
+      conversationId: 'conversation-1',
+      serverPort: 9001,
+      browserToolLeaseToken: 'lease-4',
+      readOnly: false,
+      resourcesDir,
+      browserosDir: '/state/browseros',
+    })
+
+    expect(policy.fullAccessModeCandidates).toEqual([])
+    expect(policy.sessionOptions).toEqual({})
   })
 })

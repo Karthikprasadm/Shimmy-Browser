@@ -124,7 +124,14 @@ async function main(): Promise<void> {
     if (done) break
     const chunk = decoder.decode(value, { stream: true })
     process.stdout.write(chunk)
-    if (chunk.includes('Built extension') || chunk.includes('Load "dist')) {
+    if (
+      chunk.includes('Built extension') ||
+      chunk.includes('Load "dist') ||
+      chunk.includes('Installed') ||
+      chunk.includes('✔ Pre-rendering') ||
+      chunk.includes('pre-rendering done') ||
+      chunk.includes('[6/6]')
+    ) {
       break
     }
   }

@@ -10,7 +10,6 @@ import {
 } from '@/lib/browseros/helpers'
 import {
   initializeSidePanelOptions,
-  migrateSidePanelIfOpenBetweenTabs,
   openSidePanel,
   prepareTabSidePanel,
   toggleSidePanel,
@@ -303,11 +302,9 @@ export default defineBackground(() => {
       .get([SHIMMY_AGENT_SIDEPANEL_BUSY_KEY, SHIMMY_SIDEPANEL_LAST_TAB_KEY])
       .then((v) => {
         const agentBusy = Boolean(v[SHIMMY_AGENT_SIDEPANEL_BUSY_KEY])
-        return migrateSidePanelIfOpenBetweenTabs(
-          activeInfo.tabId,
-          previousTabId,
-          agentBusy,
-        )
+        if (!agentBusy) {
+          void prepareTabSidePanel(activeInfo.tabId).catch(() => undefined)
+        }
       })
       .catch(() => null)
   })

@@ -3,6 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "bun packages/browseros-agent/scripts/dev/stack.ts",
-    "start": "bun packages/browseros-agent/scripts/dev/stack.ts"
+    "start": "bun packages/browseros-agent/scripts/dev/stack.ts",
+    "build:agent:dev": "bun run --filter @browseros/app build:dev",
+    "build:agent": "bun run --filter @browseros/app build",
+    "build": "bun run --filter @browseros/app build"
   }
 }

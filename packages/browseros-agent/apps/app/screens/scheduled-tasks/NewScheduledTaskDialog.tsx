@@ -124,9 +124,18 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
   const originalPromptRef = useRef<string | null>(null)
   const refineRequestIdRef = useRef(0)
   const isProgrammaticChange = useRef(false)
+  const refineAbortControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    return () => {
+      refineAbortControllerRef.current?.abort()
+    }
+  }, [])
 
   useEffect(() => {
     if (open) {
+      refineAbortControllerRef.current?.abort()
+      refineAbortControllerRef.current = null
       refineRequestIdRef.current++
       originalPromptRef.current = null
       setIsRefining(false)
@@ -200,10 +209,22 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
     }
   }
 
+  const handleCancelRefine = () => {
+    if (refineAbortControllerRef.current) {
+      refineAbortControllerRef.current.abort()
+      refineAbortControllerRef.current = null
+    }
+    setIsRefining(false)
+  }
+
   const handleRefinePrompt = async () => {
     const currentQuery = form.getValues('query').trim()
     const currentName = form.getValues('name').trim()
     if (!currentQuery) return
+
+    handleCancelRefine()
+    const controller = new AbortController()
+    refineAbortControllerRef.current = controller
 
     const requestId = ++refineRequestIdRef.current
     setIsRefining(true)
@@ -214,17 +235,27 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
         prompt: currentQuery,
         name: currentName || 'Untitled Task',
         providerId: form.getValues('providerId'),
+        signal: controller.signal,
       })
-      if (requestId !== refineRequestIdRef.current) return
+      if (requestId !== refineRequestIdRef.current || controller.signal.aborted)
+        return
       setQueryWithUndo(refined)
       track(SCHEDULED_TASK_PROMPT_REFINED_EVENT)
-    } catch {
-      if (requestId !== refineRequestIdRef.current) return
-      toast.error('Failed to rewrite prompt. Please try again.')
+    } catch (error) {
+      if (requestId !== refineRequestIdRef.current || controller.signal.aborted)
+        return
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to rewrite prompt. Please try again.'
+      toast.error(message)
       originalPromptRef.current = null
     } finally {
       if (requestId === refineRequestIdRef.current) {
         setIsRefining(false)
+        if (refineAbortControllerRef.current === controller) {
+          refineAbortControllerRef.current = null
+        }
       }
     }
   }
@@ -296,18 +327,28 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                     <FormLabel>Prompt</FormLabel>
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant={isRefining ? 'secondary' : 'ghost'}
                       size="sm"
-                      className="h-auto gap-1 px-2 py-1 text-muted-foreground text-xs"
-                      disabled={!queryValue?.trim() || isRefining}
-                      onClick={handleRefinePrompt}
+                      className="h-auto gap-1 px-2 py-1 text-xs"
+                      disabled={!isRefining && !queryValue?.trim()}
+                      onClick={
+                        isRefining ? handleCancelRefine : handleRefinePrompt
+                      }
+                      title={isRefining ? 'Click to cancel rewrite' : undefined}
                     >
                       {isRefining ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin text-[var(--accent-orange)]" />
+                          <span className="text-muted-foreground">
+                            Cancel rewrite
+                          </span>
+                        </>
                       ) : (
-                        <Sparkles className="h-3 w-3" />
+                        <>
+                          <Sparkles className="h-3 w-3" />
+                          <span>Rewrite with AI</span>
+                        </>
                       )}
-                      {isRefining ? 'Rewriting...' : 'Rewrite with AI'}
                     </Button>
                   </div>
                   <FormControl>
@@ -316,6 +357,9 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                       className="min-h-[100px] resize-none"
                       {...field}
                       onChange={(e) => {
+                        if (isRefining) {
+                          handleCancelRefine()
+                        }
                         field.onChange(e)
                         if (
                           !isProgrammaticChange.current &&

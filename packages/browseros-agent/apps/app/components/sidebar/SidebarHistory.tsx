@@ -160,8 +160,10 @@ export function SidebarHistory({
                           }
                           title={title}
                           className={cn(
-                            'flex h-10 min-w-0 flex-col justify-center rounded-md px-2 hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                            activeId === conversation.id && 'bg-sidebar-accent',
+                            'flex h-10 min-w-0 flex-col justify-center rounded-md px-2 transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            activeId === conversation.id
+                              ? 'border-l-2 border-[var(--accent-orange)] bg-[var(--accent-orange)]/10 pl-[6px] font-medium'
+                              : 'hover:bg-sidebar-accent',
                           )}
                         >
                           <span className="truncate text-[13px] leading-[19px]">

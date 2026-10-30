@@ -9,10 +9,12 @@ export const NewTabLayout: FC = () => {
   const hideGrid = shouldHideFocusGrid(location.pathname)
   const useChatSession = shouldUseChatSession(location.pathname)
   const content = (
-    <>
-      {!hideGrid && <NewTabFocusGrid />}
-      <Outlet />
-    </>
+    <div className="relative min-h-full">
+      <NewTabFocusGrid hideDefaultGrid={hideGrid} />
+      <div className="relative z-10">
+        <Outlet />
+      </div>
+    </div>
   )
 
   if (!useChatSession) return content

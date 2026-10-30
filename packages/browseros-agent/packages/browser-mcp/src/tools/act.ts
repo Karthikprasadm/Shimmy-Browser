@@ -3,6 +3,8 @@ import { z } from 'zod/v4'
 import {
   defineTool,
   errorResult,
+  formatStaleRefHint,
+  isStaleRefError,
   type ToolResult,
   textResult,
 } from './framework'
@@ -67,6 +69,12 @@ export const act = defineTool({
       button: z.enum(['left', 'middle', 'right']).optional(),
       clickCount: z.number().int().optional(),
       clear: z.boolean().optional(),
+      autoRetry: z
+        .boolean()
+        .optional()
+        .describe(
+          'Optionally auto-retry when element handles become stale due to dynamic DOM mutations by re-taking a micro-snapshot and re-resolving the target selector. Defaults to true.',
+        ),
     })
     .strict(),
   annotations: {
@@ -75,9 +83,97 @@ export const act = defineTool({
   },
   handler: async (args, ctx, response) => {
     const input = ctx.session.input(args.page)
+    const observer = ctx.session.observe(args.page)
 
-    const err = await runKind(args, input)
-    if (err) return err
+    // Capture ref descriptors before action in case DOM mutation renders refs stale
+    const descriptors = captureRefDescriptors(observer, args)
+
+    let currentArgs: ActArgs = { ...args }
+    let runError: unknown
+    let toolResult: ToolResult | undefined
+
+    try {
+      toolResult = await runKind(currentArgs, input)
+      if (toolResult?.isError) {
+        const text = resultText(toolResult)
+        if (isStaleRefError(text)) {
+          runError = new Error(text)
+        }
+      }
+    } catch (err) {
+      runError = err
+    }
+
+    if (runError && isStaleRefError(runError)) {
+      const canRetry = args.autoRetry !== false && descriptors.size > 0
+      if (canRetry) {
+        try {
+          await observer.snapshot()
+          const reResolved = reResolveArgsRefs(
+            observer,
+            currentArgs,
+            descriptors,
+          )
+          if (reResolved.recovered) {
+            currentArgs = reResolved.newArgs
+            let retryError: unknown
+            let retryResult: ToolResult | undefined
+            try {
+              retryResult = await runKind(currentArgs, input)
+              if (retryResult?.isError) {
+                const text = resultText(retryResult)
+                if (isStaleRefError(text)) {
+                  retryError = new Error(text)
+                }
+              }
+            } catch (err) {
+              retryError = err
+            }
+
+            if (!retryError && !retryResult?.isError) {
+              response.data({
+                kind: args.kind,
+                autoRetried: true,
+                recoveredRefs: reResolved.mapping,
+              })
+              response.text(
+                `[Auto-retry: stale ref(s) re-resolved after micro-snapshot: ${Object.entries(
+                  reResolved.mapping,
+                )
+                  .map(([oldRef, newRef]) => `"${oldRef}" -> "${newRef}"`)
+                  .join(', ')}]`,
+              )
+              response.includeDiff(args.page, { includeStructured: true })
+              return textResult(`ok (${args.kind})`)
+            }
+            if (retryError) {
+              runError = retryError
+            } else if (retryResult?.isError) {
+              return retryResult
+            }
+          }
+        } catch {
+          // Snapshot or retry failed; fall through to instructive error result
+        }
+      }
+
+      const rawMsg =
+        runError instanceof Error ? runError.message : String(runError)
+      const staleTarget =
+        args.ref || args.targetRef || args.fields?.[0]?.ref
+      const hint = formatStaleRefHint(args.page, staleTarget)
+      const fullMessage = rawMsg.toLowerCase().includes('auto-retry hint')
+        ? rawMsg
+        : `${rawMsg}\n${hint}`
+
+      return errorResult(fullMessage)
+    }
+
+    if (runError) {
+      throw runError
+    }
+
+    if (toolResult) return toolResult
 
     response.data({ kind: args.kind })
     response.includeDiff(args.page, { includeStructured: true })
@@ -86,6 +182,7 @@ export const act = defineTool({
 })
 
 type ActArgs = {
+  page: number
   kind: string
   ref?: string
   text?: string
@@ -104,6 +201,161 @@ type ActArgs = {
   button?: 'left' | 'middle' | 'right'
   clickCount?: number
   clear?: boolean
+  autoRetry?: boolean
+}
+
+interface TargetRefDescriptor {
+  ref: string
+  role: string
+  name: string
+  nth: number
+  frameId?: string
+}
+
+function captureRefDescriptors(
+  observer: ReturnType<BrowserSession['observe']>,
+  args: ActArgs,
+): Map<string, TargetRefDescriptor> {
+  const descriptors = new Map<string, TargetRefDescriptor>()
+  if (!observer?.lastRefs?.get) return descriptors
+  const recordRef = (ref?: string) => {
+    if (!ref) return
+    const entry = observer.lastRefs.get(ref)
+    if (entry) {
+      descriptors.set(ref, {
+        ref: entry.ref,
+        role: entry.role,
+        name: entry.name,
+        nth: entry.nth,
+        frameId: entry.frameId,
+      })
+    }
+  }
+
+  recordRef(args.ref)
+  recordRef(args.targetRef)
+  if (args.fields) {
+    for (const field of args.fields) {
+      recordRef(field.ref)
+    }
+  }
+  return descriptors
+}
+
+function reResolveRef(
+  observer: ReturnType<BrowserSession['observe']>,
+  descriptor: TargetRefDescriptor,
+): string | undefined {
+  if (!observer?.lastRefs?.byRef) return undefined
+  // 1. Exact match on (role, name, frameId, nth)
+  for (const candidate of observer.lastRefs.byRef.values()) {
+    if (
+      candidate.role === descriptor.role &&
+      candidate.name === descriptor.name &&
+      candidate.frameId === descriptor.frameId &&
+      candidate.nth === descriptor.nth
+    ) {
+      return candidate.ref
+    }
+  }
+
+  // 2. Exact match on (role, name, frameId)
+  const matches: string[] = []
+  for (const candidate of observer.lastRefs.byRef.values()) {
+    if (
+      candidate.role === descriptor.role &&
+      candidate.name === descriptor.name &&
+      candidate.frameId === descriptor.frameId
+    ) {
+      matches.push(candidate.ref)
+    }
+  }
+  if (matches.length === 1) {
+    return matches[0]
+  }
+  if (matches.length > 0) {
+    return matches[Math.min(descriptor.nth, matches.length - 1)]
+  }
+
+  // 3. Match across frames if unique
+  const crossFrameMatches: string[] = []
+  for (const candidate of observer.lastRefs.byRef.values()) {
+    if (
+      candidate.role === descriptor.role &&
+      candidate.name === descriptor.name
+    ) {
+      crossFrameMatches.push(candidate.ref)
+    }
+  }
+  if (crossFrameMatches.length === 1) {
+    return crossFrameMatches[0]
+  }
+
+  return undefined
+}
+
+function reResolveArgsRefs(
+  observer: ReturnType<BrowserSession['observe']>,
+  args: ActArgs,
+  descriptors: Map<string, TargetRefDescriptor>,
+): {
+  recovered: boolean
+  newArgs: ActArgs
+  mapping: Record<string, string>
+} {
+  let recovered = false
+  const newArgs: ActArgs = { ...args }
+  const mapping: Record<string, string> = {}
+
+  if (args.ref && descriptors.has(args.ref)) {
+    const fresh = reResolveRef(observer, descriptors.get(args.ref)!)
+    if (fresh) {
+      newArgs.ref = fresh
+      mapping[args.ref] = fresh
+      recovered = true
+    }
+  }
+
+  if (args.targetRef && descriptors.has(args.targetRef)) {
+    const fresh = reResolveRef(observer, descriptors.get(args.targetRef)!)
+    if (fresh) {
+      newArgs.targetRef = fresh
+      mapping[args.targetRef] = fresh
+      recovered = true
+    }
+  }
+
+  if (args.fields && args.fields.length > 0) {
+    const updatedFields: { ref: string; value: string }[] = []
+    let fieldsRecovered = false
+    for (const f of args.fields) {
+      if (descriptors.has(f.ref)) {
+        const fresh = reResolveRef(observer, descriptors.get(f.ref)!)
+        if (fresh) {
+          updatedFields.push({ ref: fresh, value: f.value })
+          mapping[f.ref] = fresh
+          fieldsRecovered = true
+        } else {
+          updatedFields.push({ ...f })
+        }
+      } else {
+        updatedFields.push({ ...f })
+      }
+    }
+    if (fieldsRecovered) {
+      newArgs.fields = updatedFields
+      recovered = true
+    }
+  }
+
+  return { recovered, newArgs, mapping }
+}
+
+function resultText(result: ToolResult): string {
+  return result.content
+    .map((item) => (item.type === 'text' ? item.text : ''))
+    .filter(Boolean)
+    .join('\n')
 }
 
 type ActHandler = (

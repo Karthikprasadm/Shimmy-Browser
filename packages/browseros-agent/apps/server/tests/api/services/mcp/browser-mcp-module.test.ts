@@ -7,7 +7,11 @@ import { createBrowserOutputFileAccess } from '@browseros/browser-mcp/output-fil
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
 import type { ActiveConversationRun } from '../../../../src/api/services/conversation-runs'
 import { KlavisService } from '../../../../src/api/services/klavis/service'
-import { BrowserMcpModule } from '../../../../src/api/services/mcp/browser-mcp-module'
+import {
+  BrowserMcpModule,
+  DEFAULT_LEASE_INACTIVITY_TTL_MS,
+  InvalidBrowserToolLeaseError,
+} from '../../../../src/api/services/mcp/browser-mcp-module'
 import { createReadTool } from '../../../../src/tools/filesystem/read'
 
 type RegisteredTool = {
@@ -42,9 +46,18 @@ function browserSession(): BrowserSession {
     },
   ]
 
+  const closePageMock = mock(async (pageId: number) => {
+    const idx = pages.findIndex((page) => page.pageId === pageId)
+    if (idx >= 0) pages.splice(idx, 1)
+  })
+
+  const closeTargetMock = mock(async (_params: { targetId: string }) => ({
+    success: true,
+  }))
+
   return {
     pages: {
-      list: async () => pages,
+      list: async () => [...pages],
       getActive: async () => pages[0],
       getInfo: (pageId: number) => pages.find((page) => page.pageId === pageId),
       getTabId: (pageId: number) =>
@@ -60,6 +73,12 @@ function browserSession(): BrowserSession {
           isActive: false,
         })
         return 2
+      },
+      close: closePageMock,
+    },
+    protocol: {
+      Target: {
+        closeTarget: closeTargetMock,
       },
     },
     nav: (_pageId: number) => ({
@@ -513,6 +532,236 @@ describe('BrowserMcpModule', () => {
       }
       rmSync(browserosDir, { recursive: true, force: true })
     }
+  })
+
+  it('cleanly closes dangling DevTools CDP targets and pages when a lease is revoked', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    runs.start(conversationId, 'cleanup-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/target-test',
+    })
+
+    expect((await session.pages.list()).some((p) => p.pageId === 2)).toBe(true)
+
+    await lease.revoke()
+
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+    expect(
+      (
+        session as unknown as {
+          protocol: { Target: { closeTarget: ReturnType<typeof mock> } }
+        }
+      ).protocol.Target.closeTarget,
+    ).toHaveBeenCalledWith({ targetId: 'target-2' })
+    expect(session.pages.close).not.toHaveBeenCalledWith(1)
+    expect((await session.pages.list()).some((p) => p.pageId === 1)).toBe(true)
+  })
+
+  it('does not re-close pages that were already explicitly closed before revocation', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    runs.start(conversationId, 'explicit-close-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/target-test',
+    })
+
+    await server._registeredTools.tabs.handler({
+      action: 'close',
+      page: 2,
+    })
+
+    expect(session.pages.close).toHaveBeenCalledTimes(1)
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+
+    await lease.revoke()
+    expect(session.pages.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('tracks and closes targets created via raw CDP calls', async () => {
+    const session = browserSession()
+    session.cdp = mock(async (method: string) => {
+      if (method === 'Target.createTarget') {
+        return { targetId: 'cdp-target-99' }
+      }
+      return {}
+    })
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    runs.start(conversationId, 'raw-cdp-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.run.handler({
+      code: 'await browser.cdp("Target.createTarget", { url: "https://example.com" }); return "created"',
+    })
+
+    await lease.revoke()
+
+    expect(
+      (
+        session as unknown as {
+          protocol: { Target: { closeTarget: ReturnType<typeof mock> } }
+        }
+      ).protocol.Target.closeTarget,
+    ).toHaveBeenCalledWith({ targetId: 'cdp-target-99' })
+  })
+
+  it('exposes a default 30-minute inactivity TTL constant', () => {
+    expect(DEFAULT_LEASE_INACTIVITY_TTL_MS).toBe(30 * 60 * 1000)
+  })
+
+  it('automatically cleans up targets and expires orphaned leases after inactivity TTL', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+      inactivityTtlMs: 40,
+    })
+    runs.start(conversationId, 'inactivity-cleanup-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/orphaned-test',
+    })
+
+    expect((await session.pages.list()).some((p) => p.pageId === 2)).toBe(true)
+    expect(runtime.getActiveLeaseCount()).toBe(1)
+
+    // Wait for the 40ms inactivity TTL to expire
+    await new Promise((resolve) => setTimeout(resolve, 65))
+
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+    expect(runtime.getActiveLeaseCount()).toBe(0)
+    expect(() => runtime.validateLeaseToken(lease.token)).toThrow(
+      InvalidBrowserToolLeaseError,
+    )
+  })
+
+  it('refreshes inactivity TTL when tool dispatch or MCP calls occur', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+      inactivityTtlMs: 80,
+    })
+    runs.start(conversationId, 'ttl-refresh-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/refresh-test',
+    })
+
+    // At 40ms, perform another tool call to refresh the lease TTL
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    await server._registeredTools.tabs.handler({ action: 'list' })
+
+    // At 90ms (50ms after refresh, but 90ms after initial creation), the lease should still be alive
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(runtime.getActiveLeaseCount()).toBe(1)
+    expect(session.pages.close).not.toHaveBeenCalled()
+
+    // At 150ms (60ms more, 110ms after last refresh), the lease should now have expired
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(runtime.getActiveLeaseCount()).toBe(0)
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+  })
+
+  it('cancels inactivity timer and cleans up targets when lease is explicitly revoked', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId = crypto.randomUUID()
+    const lease = runtime.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+      inactivityTtlMs: 80,
+    })
+    runs.start(conversationId, 'explicit-revoke-run')
+    const server = inspect(runtime.createMcpServer({ leaseToken: lease.token }))
+
+    await server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/revoke-test',
+    })
+
+    await lease.revoke()
+    expect(session.pages.close).toHaveBeenCalledTimes(1)
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+    expect(runtime.getActiveLeaseCount()).toBe(0)
+
+    // Wait past the original TTL to verify cleanup is not called again
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(session.pages.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('destroy() cleans up all tracked leases and cancels timers', async () => {
+    const session = browserSession()
+    const { browserMcp: runtime, runs } = moduleFixture({ session })
+    const conversationId1 = crypto.randomUUID()
+    const conversationId2 = crypto.randomUUID()
+    const lease1 = runtime.createLease({
+      conversationId: conversationId1,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+      inactivityTtlMs: 5000,
+    })
+    const lease2 = runtime.createLease({
+      conversationId: conversationId2,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+      inactivityTtlMs: 5000,
+    })
+    runs.start(conversationId1, 'destroy-run-1')
+    const server1 = inspect(
+      runtime.createMcpServer({ leaseToken: lease1.token }),
+    )
+    await server1._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://browseros.com/destroy-test',
+    })
+
+    expect(runtime.getActiveLeaseCount()).toBe(2)
+    await runtime.destroy()
+
+    expect(runtime.getActiveLeaseCount()).toBe(0)
+    expect(session.pages.close).toHaveBeenCalledWith(2)
+    expect(() => runtime.validateLeaseToken(lease1.token)).toThrow(
+      InvalidBrowserToolLeaseError,
+    )
+    expect(() => runtime.validateLeaseToken(lease2.token)).toThrow(
+      InvalidBrowserToolLeaseError,
+    )
   })
 })
 

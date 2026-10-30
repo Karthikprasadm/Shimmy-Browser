@@ -1,5 +1,6 @@
 import { ChevronDown, Loader2, Plus } from 'lucide-react'
 import { type FC, useState } from 'react'
+import { KlavisStatusBadge } from '@/components/mcp/KlavisStatusBadge'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
 import {
@@ -7,17 +8,24 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import type { KlavisServiceStatus } from '@/modules/mcp/user-integrations.hooks'
 
 export interface AvailableManagedServersProps {
   availableServers?: { name: string; description: string }[]
   onAddServer: (args: { name: string; description: string }) => void
   isLoading?: boolean
+  klavisStatus?: KlavisServiceStatus
+  onRetryKlavis?: () => void
+  isRetryingKlavis?: boolean
 }
 
 export const AvailableManagedServers: FC<AvailableManagedServersProps> = ({
   availableServers,
   onAddServer,
   isLoading,
+  klavisStatus,
+  onRetryKlavis,
+  isRetryingKlavis,
 }) => {
   const [isOpen, setIsOpen] = useState(true)
 
@@ -25,8 +33,17 @@ export const AvailableManagedServers: FC<AvailableManagedServersProps> = ({
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className="rounded-xl border border-border bg-card p-6 shadow-sm transition-all hover:shadow-md">
         <CollapsibleTrigger className="flex w-full cursor-pointer items-center justify-between hover:opacity-50">
-          <div className="flex flex-col items-start">
-            <h3 className="font-semibold text-lg">Built-in Apps</h3>
+          <div className="flex flex-col items-start gap-1">
+            <div className="flex items-center gap-3">
+              <h3 className="font-semibold text-lg">Built-in Apps</h3>
+              {klavisStatus && (
+                <KlavisStatusBadge
+                  status={klavisStatus}
+                  onRetry={onRetryKlavis}
+                  isRetrying={isRetryingKlavis}
+                />
+              )}
+            </div>
             <p className="text-muted-foreground text-sm">
               {isLoading
                 ? 'Loading...'
@@ -41,6 +58,17 @@ export const AvailableManagedServers: FC<AvailableManagedServersProps> = ({
         </CollapsibleTrigger>
 
         <CollapsibleContent className="pt-4">
+          {klavisStatus &&
+            klavisStatus !== 'connected' &&
+            klavisStatus !== 'loading' && (
+              <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-700 text-xs dark:text-amber-300">
+                <p className="font-medium">
+                  {klavisStatus === 'unconfigured'
+                    ? 'Klavis credentials unconfigured: Managed app integrations (Slack, GitHub, Notion, Postman) require active credentials to connect.'
+                    : 'Klavis cloud service is currently unreachable. Connecting managed integrations may fail until the service is reachable.'}
+                </p>
+              </div>
+            )}
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

@@ -45,39 +45,82 @@ export async function refinePrompt(params: {
   prompt: string
   name: string
   providerId?: string
+  signal?: AbortSignal
+  timeoutMs?: number
 }): Promise<string> {
-  const agentServerUrl = await getAgentServerUrl()
-  const provider = await resolveProvider(params.providerId)
+  const timeoutMs = params.timeoutMs ?? 25000
+  const timeoutController = new AbortController()
+  const timer = setTimeout(() => {
+    timeoutController.abort(
+      new Error(
+        `Prompt refinement timed out after ${Math.round(timeoutMs / 1000)}s`,
+      ),
+    )
+  }, timeoutMs)
 
-  const response = await fetch(`${agentServerUrl}/refine-prompt`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt: params.prompt,
-      name: params.name,
-      provider: provider.type,
-      model: provider.modelId ?? 'default',
-      apiKey: provider.apiKey,
-      baseUrl: provider.baseUrl,
-      resourceName: provider.resourceName,
-      accessKeyId: provider.accessKeyId,
-      secretAccessKey: provider.secretAccessKey,
-      region: provider.region,
-      sessionToken: provider.sessionToken,
-    }),
-  })
-
-  if (!response.ok) {
-    const errorData = (await response
-      .json()
-      .catch(() => null)) as RefinePromptResponse | null
-    throw new Error(errorData?.message ?? `Request failed: ${response.status}`)
+  let combinedSignal: AbortSignal = timeoutController.signal
+  if (params.signal) {
+    if (typeof AbortSignal.any === 'function') {
+      combinedSignal = AbortSignal.any([
+        params.signal,
+        timeoutController.signal,
+      ])
+    } else {
+      params.signal.addEventListener('abort', () => {
+        timeoutController.abort(params.signal?.reason)
+      })
+    }
   }
 
-  const data = (await response.json()) as RefinePromptResponse
-  if (!data.success || !data.refined) {
-    throw new Error(data.message ?? 'Failed to refine prompt')
-  }
+  try {
+    const agentServerUrl = await getAgentServerUrl()
+    const provider = await resolveProvider(params.providerId)
 
-  return data.refined
+    const response = await fetch(`${agentServerUrl}/refine-prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: combinedSignal,
+      body: JSON.stringify({
+        prompt: params.prompt,
+        name: params.name,
+        provider: provider.type,
+        model: provider.modelId ?? 'default',
+        apiKey: provider.apiKey,
+        baseUrl: provider.baseUrl,
+        resourceName: provider.resourceName,
+        accessKeyId: provider.accessKeyId,
+        secretAccessKey: provider.secretAccessKey,
+        region: provider.region,
+        sessionToken: provider.sessionToken,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = (await response
+        .json()
+        .catch(() => null)) as RefinePromptResponse | null
+      throw new Error(
+        errorData?.message ?? `Request failed: ${response.status}`,
+      )
+    }
+
+    const data = (await response.json()) as RefinePromptResponse
+    if (!data.success || !data.refined) {
+      throw new Error(data.message ?? 'Failed to refine prompt')
+    }
+
+    return data.refined
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw new Error('Prompt refinement was cancelled')
+    }
+    if (timeoutController.signal.aborted) {
+      throw new Error(
+        `Prompt refinement timed out after ${Math.round(timeoutMs / 1000)}s. Please try again.`,
+      )
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }

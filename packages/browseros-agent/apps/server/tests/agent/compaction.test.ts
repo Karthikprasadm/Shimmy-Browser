@@ -18,6 +18,7 @@ import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
 } from '../../src/agent/message-normalization'
+import type { ResolvedAgentConfig } from '../../src/agent/types'
 
 const {
   COMPACTION_RESERVE_TOKENS,
@@ -72,7 +73,10 @@ function toolResult(
   }
 }
 
-function toolResultJson(toolName: string, value: unknown): ModelMessage {
+function toolResultJson(
+  toolName: string,
+  value: Extract<ToolResultPart['output'], { type: 'json' }>['value'],
+): ModelMessage {
   return {
     role: 'tool',
     content: [
@@ -118,13 +122,8 @@ function repeat(char: string, count: number): string {
 }
 
 function agentConfig(
-  overrides: Partial<{
-    provider: string
-    model: string
-    upstreamProvider: string
-    supportsImages: boolean
-  }> = {},
-) {
+  overrides: Partial<ResolvedAgentConfig> = {},
+): ResolvedAgentConfig {
   return {
     conversationId: 'test-conversation',
     provider: LLM_PROVIDERS.OPENROUTER,
@@ -170,7 +169,9 @@ function expectNoOrphanedToolResults(messages: ModelMessage[]): void {
 
     if (message.role === 'tool') {
       for (const part of message.content) {
-        expect(seenCallIds.has(part.toolCallId)).toBe(true)
+        if (part.type === 'tool-result') {
+          expect(seenCallIds.has(part.toolCallId)).toBe(true)
+        }
       }
     }
   }
@@ -199,11 +200,23 @@ describe('computeBudget: trigger threshold', () => {
 })
 
 describe('computeBudget: overhead', () => {
-  it('8K model → overhead is capped at 40% of context', () => {
-    expect(computeBudget(8_000).overhead).toBe(3_200)
+  it('4K model (<= 16384) → overhead is scaled down to 25% of context', () => {
+    expect(computeBudget(4_000).overhead).toBe(1_000)
   })
 
-  it('20K model → overhead is capped at 40% of context', () => {
+  it('8K model (<= 16384) → overhead is scaled down to 25% of context', () => {
+    expect(computeBudget(8_000).overhead).toBe(2_000)
+  })
+
+  it('16K model (<= 16384) → overhead is scaled down to 25% of context', () => {
+    expect(computeBudget(16_000).overhead).toBe(4_000)
+  })
+
+  it('16384 model (boundary) → overhead is scaled down to 25% of context', () => {
+    expect(computeBudget(16_384).overhead).toBe(4_096)
+  })
+
+  it('20K model (> 16384) → overhead is capped at 40% of context', () => {
     expect(computeBudget(20_000).overhead).toBe(8_000)
   })
 
@@ -570,6 +583,102 @@ describe('normalizeMessagesForModel', () => {
     expect(normalized).toHaveLength(2)
     const output = (normalized[1].content as ToolResultPart[])[0].output
     expect(output.type).toBe('text')
+  })
+
+  it('strips previous tool screenshots when switching to a non-vision model even if provider supports media in tool results', () => {
+    const messages = [
+      assistantToolCall('snapshot', { page: 2 }),
+      toolResultContent('snapshot', [
+        { type: 'text', text: 'Captured screenshot' },
+        {
+          type: 'image-data',
+          data: 'abcd',
+          mediaType: 'image/png',
+        },
+      ]),
+    ]
+
+    const normalized = normalizeMessagesForModel(messages, {
+      supportsImages: false,
+      supportsMediaInToolResults: true,
+    })
+
+    expect(normalized).toHaveLength(2)
+    const output = (normalized[1].content as ToolResultPart[])[0].output
+    expect(output.type).toBe('text')
+    if (output.type === 'text') {
+      expect(output.value).toContain('Captured screenshot')
+      expect(output.value).toContain('[Image]')
+      expect(output.value).not.toContain('abcd')
+    }
+  })
+
+  it('drops synthetic tool result media user messages when switching mid-conversation to a non-vision model', () => {
+    const messages: ModelMessage[] = [
+      userMsg('Take a screenshot of the dashboard'),
+      assistantToolCall('screenshot', {}),
+      toolResult('screenshot', 'Screenshot captured\n[Image]'),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Attached image(s) from tool result:' },
+          { type: 'image', image: 'base64-data', mediaType: 'image/png' },
+        ],
+      },
+      assistantMsg('Here is the dashboard analysis'),
+    ]
+
+    const normalized = normalizeMessagesForModel(messages, {
+      supportsImages: false,
+      supportsMediaInToolResults: false,
+    })
+
+    expect(normalized).toHaveLength(4)
+    expect(normalized.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'tool',
+      'assistant',
+    ])
+    for (const msg of normalized) {
+      if (Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          expect(part.type).not.toBe('image')
+        }
+      }
+    }
+  })
+
+  it('replaces user-attached images with text placeholders for non-vision models', () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Analyze this chart' },
+          { type: 'image', image: 'chart-data', mediaType: 'image/png' },
+        ],
+      },
+    ]
+
+    const normalized = normalizeMessagesForModel(messages, {
+      supportsImages: false,
+      supportsMediaInToolResults: false,
+    })
+
+    expect(normalized).toHaveLength(1)
+    const userMessage = normalized[0]
+    expect(userMessage.role).toBe('user')
+    expect(Array.isArray(userMessage.content)).toBe(true)
+    if (Array.isArray(userMessage.content)) {
+      expect(userMessage.content[0]).toEqual({
+        type: 'text',
+        text: 'Analyze this chart',
+      })
+      expect(userMessage.content[1]).toEqual({
+        type: 'text',
+        text: '[Image]',
+      })
+    }
   })
 
   it('converts generic file attachments into follow-up user file parts', () => {

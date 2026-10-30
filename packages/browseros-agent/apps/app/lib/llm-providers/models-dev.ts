@@ -15,7 +15,7 @@ export interface ModelsDevModel {
   supportsImages: boolean
   supportsReasoning: boolean
   supportsToolCall: boolean
-  supportsTemperature: boolean
+  supportsTemperature?: boolean
   reasoningControls?: ReasoningControl[]
   inputCost?: number
   outputCost?: number
@@ -28,7 +28,7 @@ export interface ModelsDevProvider {
   models: ModelsDevModel[]
 }
 
-const modelsDevData: Record<string, ModelsDevProvider> = data as Record<
+const modelsDevData: Record<string, ModelsDevProvider> = data as unknown as Record<
   string,
   ModelsDevProvider
 >

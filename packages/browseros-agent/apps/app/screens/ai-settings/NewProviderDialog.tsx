@@ -87,6 +87,7 @@ import {
   normalizeProviderFormValues,
   type ProviderFormValues,
   providerFormSchema,
+  trimTrailingSlashes,
 } from './provider-form-schema'
 
 /** Window assumed for any model the bundled catalog cannot size. */
@@ -725,7 +726,21 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 <FormItem>
                   <FormLabel>Base URL Override</FormLabel>
                   <FormControl>
-                    <Input placeholder="Optional custom URL" {...field} />
+                    <Input
+                      placeholder="Optional custom URL"
+                      {...field}
+                      onBlur={() => {
+                        field.onBlur()
+                        if (field.value) {
+                          const trimmed = trimTrailingSlashes(field.value)
+                          if (trimmed && trimmed !== field.value) {
+                            form.setValue('baseUrl', trimmed, {
+                              shouldValidate: true,
+                            })
+                          }
+                        }
+                      }}
+                    />
                   </FormControl>
                   <FormDescription>
                     Overrides resource name if set
@@ -895,7 +910,21 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               <FormItem>
                 <FormLabel>Base URL *</FormLabel>
                 <FormControl>
-                  <Input placeholder="https://api.minimaxi.com/v1" {...field} />
+                  <Input
+                    placeholder="https://api.minimaxi.com/v1"
+                    {...field}
+                    onBlur={() => {
+                      field.onBlur()
+                      if (field.value) {
+                        const trimmed = trimTrailingSlashes(field.value)
+                        if (trimmed && trimmed !== field.value) {
+                          form.setValue('baseUrl', trimmed, {
+                            shouldValidate: true,
+                          })
+                        }
+                      }
+                    }}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -945,7 +974,21 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
             <FormItem>
               <FormLabel>Base URL *</FormLabel>
               <FormControl>
-                <Input placeholder="https://api.openai.com/v1" {...field} />
+                <Input
+                  placeholder="https://api.openai.com/v1"
+                  {...field}
+                  onBlur={() => {
+                    field.onBlur()
+                    if (field.value) {
+                      const trimmed = trimTrailingSlashes(field.value)
+                      if (trimmed && trimmed !== field.value) {
+                        form.setValue('baseUrl', trimmed, {
+                          shouldValidate: true,
+                        })
+                      }
+                    }
+                  }}
+                />
               </FormControl>
               {watchedType === 'openai' && (
                 <FormDescription>

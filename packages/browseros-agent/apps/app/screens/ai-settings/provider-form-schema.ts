@@ -178,12 +178,24 @@ export function isCredentiallessProviderType(
   return credentiallessProviderTypes.has(type)
 }
 
+/**
+ * Trims leading/trailing whitespace and any trailing slashes from a URL.
+ * Prevents duplicate slashes (e.g. '/v1//chat/completions') when endpoints are concatenated.
+ */
+export function trimTrailingSlashes(url?: string): string | undefined {
+  if (!url) return url
+  const trimmed = url.trim()
+  return trimmed.replace(/\/+$/, '')
+}
+
 export function normalizeProviderFormValues(
   values: ProviderFormValues,
 ): Omit<ProviderFormValues, 'headers'> & { headers?: Record<string, string> } {
-  const { headers, ...rest } = values
+  const { headers, baseUrl, ...rest } = values
+  const normalizedBaseUrl = trimTrailingSlashes(baseUrl)
   return {
     ...rest,
+    ...(baseUrl !== undefined && { baseUrl: normalizedBaseUrl }),
     ...(headers && {
       headers: Object.fromEntries(
         headers.map(({ name, value }) => [name, value]),

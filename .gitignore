@@ -33,6 +33,7 @@ gclient.json
 .env.production
 .grove/
 AGENTS.md
+/tsconfig.json
 **/resources/binaries/
 
 packages/browseros/build/tools/

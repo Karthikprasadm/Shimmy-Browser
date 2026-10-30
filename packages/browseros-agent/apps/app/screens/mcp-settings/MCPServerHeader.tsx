@@ -8,9 +8,11 @@ import {
 } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { toast } from 'sonner'
+import { KlavisStatusBadge } from '@/components/mcp/KlavisStatusBadge'
 import { Button } from '@/components/ui/button'
 import { MCP_SERVER_RESTARTED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
+import type { KlavisServiceStatus } from '@/modules/mcp/user-integrations.hooks'
 import { ServerPortEditor } from './ServerPortEditor'
 import { waitForServerHealth } from './server-health'
 
@@ -18,7 +20,10 @@ export interface MCPServerHeaderProps {
   serverUrl: string | null
   isLoading: boolean
   error: string | null
+  klavisStatus?: KlavisServiceStatus
   onServerRestart?: () => void
+  onRetryKlavis?: () => void
+  isRetryingKlavis?: boolean
 }
 
 const DOCS_URL = 'https://docs.browseros.com/features/use-with-claude-code'
@@ -27,7 +32,10 @@ export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
   serverUrl,
   isLoading,
   error,
+  klavisStatus,
   onServerRestart,
+  onRetryKlavis,
+  isRetryingKlavis,
 }) => {
   const [isCopied, setIsCopied] = useState(false)
   const [isRestarting, setIsRestarting] = useState(false)
@@ -75,17 +83,26 @@ export const MCPServerHeader: FC<MCPServerHeaderProps> = ({
           <Server className="h-6 w-6 text-[var(--accent-orange)]" />
         </div>
         <div className="flex-1">
-          <div className="mb-1 flex items-center justify-between">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
             <h2 className="font-semibold text-xl">Shimmy MCP Server</h2>
-            <a
-              href={DOCS_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 text-muted-foreground text-sm transition-colors hover:text-[var(--accent-orange)]"
-            >
-              Docs
-              <ExternalLink className="h-3.5 w-3.5" />
-            </a>
+            <div className="flex items-center gap-3">
+              {klavisStatus && (
+                <KlavisStatusBadge
+                  status={klavisStatus}
+                  onRetry={onRetryKlavis}
+                  isRetrying={isRetryingKlavis}
+                />
+              )}
+              <a
+                href={DOCS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-muted-foreground text-sm transition-colors hover:text-[var(--accent-orange)]"
+              >
+                Docs
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
           </div>
           <p className="mb-6 text-muted-foreground text-sm">
             Connect Shimmy to MCP clients like Claude Code, Gemini CLI and

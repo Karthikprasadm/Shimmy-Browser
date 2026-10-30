@@ -44,7 +44,7 @@ interface CreateApiRoutesDeps {
 }
 
 /** Composes the BrowserOS HTTP API from the existing route factories. */
-export function createApiRoutes(deps: CreateApiRoutesDeps) {
+export function createApiRoutes(deps: CreateApiRoutesDeps): Hono<Env> {
   const {
     agentRoutes,
     config,
@@ -80,17 +80,25 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
         }),
     })
 
+  const shutdownHandler = () => {
+    void browserMcp.destroy()
+    onShutdown()
+  }
+
   return (
     new Hono<Env>()
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
       .route('/system/health', createHealthRoute({ browser }))
       .route('/system/diagnostics', createDiagnosticsRoute(version))
-      .route('/system/shutdown', createShutdownRoute({ onShutdown }))
+      .route(
+        '/system/shutdown',
+        createShutdownRoute({ onShutdown: shutdownHandler }),
+      )
       // Compatibility aliases for shipped browsers that still probe root paths
       // while the server binary can update independently during OTA.
       .route('/health', createHealthRoute({ browser }))
-      .route('/shutdown', createShutdownRoute({ onShutdown }))
+      .route('/shutdown', createShutdownRoute({ onShutdown: shutdownHandler }))
       .route('/status', createStatusRoute({ browser, activity }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))

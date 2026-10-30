@@ -54,11 +54,13 @@ async function backupToBrowserOS(backup: LlmProvidersBackup): Promise<void> {
   }
 }
 
+const backupToShimmy = backupToBrowserOS
+
 export function setupLlmProvidersBackupToBrowserOS(): () => void {
   const unsubscribe = providersStorage.watch(async (providers) => {
     if (providers) {
       const defaultProviderId = await defaultProviderIdStorage.getValue()
-      await backupToShimmy({ defaultProviderId, providers })
+      await backupToBrowserOS({ defaultProviderId, providers })
     }
   })
   return unsubscribe

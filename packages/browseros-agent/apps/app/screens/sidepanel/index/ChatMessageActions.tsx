@@ -66,7 +66,7 @@ export const ChatMessageActions: FC<ChatMessageActionsProps> = ({
         label="Copy"
         tooltip="Copy to clipboard"
       >
-        <CopyIcon className="size-3" />
+        <CopyIcon className="size-4" />
       </MessageAction>
       <AnimatePresence mode="wait" initial={false}>
         {feedbackSubmitted ? (

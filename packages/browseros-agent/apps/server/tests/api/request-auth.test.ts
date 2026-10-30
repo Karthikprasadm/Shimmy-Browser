@@ -16,6 +16,7 @@ describe('request auth', () => {
   it('accepts loopback and extension origins', () => {
     expect(isTrustedAppOrigin('http://127.0.0.1:9105')).toBe(true)
     expect(isTrustedAppOrigin('http://localhost:3000')).toBe(true)
+    expect(isTrustedAppOrigin('http://[::1]:9105')).toBe(true)
     expect(isTrustedAppOrigin('chrome-extension://browseros')).toBe(true)
     expect(isTrustedAppOrigin('moz-extension://browseros')).toBe(true)
   })
@@ -53,6 +54,32 @@ describe('request auth', () => {
         },
       },
       localServer,
+    )
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+
+  it('allows requests from IPv6 [::1] loopback host and socket IP', async () => {
+    const ipv6Server = {
+      server: {
+        requestIP: () => ({ address: '::1' }),
+      },
+    } as never
+
+    const app = new Hono<Env>()
+      .use('/*', requireTrustedAppOrigin())
+      .get('/agents/status', (c) => c.json({ ok: true }))
+
+    const res = await app.request(
+      'http://[::1]:9105/agents/status',
+      {
+        headers: {
+          Host: '[::1]:9105',
+          Origin: 'http://[::1]:9105',
+        },
+      },
+      ipv6Server,
     )
 
     expect(res.status).toBe(200)

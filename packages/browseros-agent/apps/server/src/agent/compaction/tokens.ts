@@ -164,6 +164,9 @@ export function estimateTokens(
  * `prepareStep` receives only the conversation messages: the system prompt and
  * the tool schemas are passed separately and are invisible here, so estimating
  * from messages alone under-counts every request by a five-figure token amount.
+ * The overhead value is dynamically scaled by `computeBudget` (capped at 25% of
+ * context window for models with contextWindow <= 16,384) to prevent premature
+ * compaction on smaller models.
  */
 export function estimateTotalTokens(
   messages: ModelMessage[],

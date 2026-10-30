@@ -2,6 +2,7 @@ import { Check, Loader2, Plus, Server, Trash2 } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { toast } from 'sonner'
 import { ApiKeyDialog } from '@/components/mcp/ApiKeyDialog'
+import { KlavisStatusBadge } from '@/components/mcp/KlavisStatusBadge'
 import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
 import {
@@ -56,6 +57,8 @@ export const ConnectMCP: FC = () => {
   const {
     data: userMCPIntegrations,
     isLoading: isUserMCPIntegrationsLoading,
+    isFetching: isUserMCPIntegrationsFetching,
+    klavisStatus,
     mutate: mutateUserIntegrations,
   } = useGetUserMCPIntegrations()
 
@@ -220,7 +223,14 @@ export const ConnectMCP: FC = () => {
             <Server className="h-6 w-6 text-[var(--accent-orange)]" />
           </div>
           <div className="flex-1">
-            <h2 className="mb-1 font-semibold text-xl">Connected Apps</h2>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-semibold text-xl">Connected Apps</h2>
+              <KlavisStatusBadge
+                status={klavisStatus}
+                onRetry={() => mutateUserIntegrations()}
+                isRetrying={isUserMCPIntegrationsFetching}
+              />
+            </div>
             <p className="mb-6 text-muted-foreground text-sm">
               Connect Shimmy Sup to apps to send email, schedule calendar
               events, write docs, and more
@@ -294,6 +304,18 @@ export const ConnectMCP: FC = () => {
                       <Check className="h-3 w-3" />
                       Authenticated
                     </span>
+                  ) : klavisStatus === 'unconfigured' ? (
+                    <KlavisStatusBadge
+                      status="unconfigured"
+                      onRetry={() => mutateUserIntegrations()}
+                      isRetrying={isUserMCPIntegrationsFetching}
+                    />
+                  ) : klavisStatus === 'unreachable' ? (
+                    <KlavisStatusBadge
+                      status="unreachable"
+                      onRetry={() => mutateUserIntegrations()}
+                      isRetrying={isUserMCPIntegrationsFetching}
+                    />
                   ) : (
                     <Button
                       variant="outline"
@@ -339,6 +361,9 @@ export const ConnectMCP: FC = () => {
         availableServers={availableServers}
         onAddServer={addManagedServer}
         isLoading={isServersListLoading}
+        klavisStatus={klavisStatus}
+        onRetryKlavis={() => mutateUserIntegrations()}
+        isRetryingKlavis={isUserMCPIntegrationsFetching}
       />
 
       <AddManagedMCPDialog

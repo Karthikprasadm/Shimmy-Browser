@@ -170,14 +170,77 @@ function normalizeToolMessageForModel(
   return [normalizedToolMessage, mediaMessage]
 }
 
+function isToolResultMediaMessage(message: UserModelMessage): boolean {
+  if (!Array.isArray(message.content) || message.content.length === 0) {
+    return false
+  }
+  const first = message.content[0]
+  if (first.type !== 'text') return false
+  return (
+    first.text === 'Attached image(s) from tool result:' ||
+    first.text === 'Attached file(s) from tool result:' ||
+    first.text === 'Attached files from tool result:'
+  )
+}
+
+function normalizeUserMessageForNonVisionModel(
+  message: UserModelMessage,
+): UserModelMessage | null {
+  if (typeof message.content === 'string') {
+    return message
+  }
+
+  if (isToolResultMediaMessage(message)) {
+    const nonImageFiles = message.content.slice(1).filter((part) => {
+      if (part.type === 'image') return false
+      if (part.type === 'file' && part.mediaType?.startsWith('image/')) {
+        return false
+      }
+      return true
+    }) as UserMediaPart[]
+
+    if (nonImageFiles.length === 0) {
+      return null
+    }
+
+    return {
+      ...message,
+      content: [
+        {
+          type: 'text',
+          text: buildToolResultMediaLabel(nonImageFiles),
+        },
+        ...nonImageFiles,
+      ],
+    }
+  }
+
+  let hasImage = false
+  const content = message.content.map((part) => {
+    if (part.type === 'image') {
+      hasImage = true
+      return { type: 'text' as const, text: '[Image]' }
+    }
+    if (part.type === 'file' && part.mediaType?.startsWith('image/')) {
+      hasImage = true
+      return { type: 'text' as const, text: '[Image]' }
+    }
+    return part
+  })
+
+  return hasImage ? { ...message, content } : message
+}
+
 // opencode handles this at message serialization time for providers that do not
 // reliably support media inside tool results. BrowserOS uses the same boundary:
 // normalize model messages before the next step, not inside the screenshot tool.
+// When switching mid-conversation from a vision model to a non-vision model,
+// tool screenshots and follow-up media messages are stripped to prevent provider 400 rejection.
 export function normalizeMessagesForModel(
   messages: ModelMessage[],
   options: MessageNormalizationOptions,
 ): ModelMessage[] {
-  if (options.supportsMediaInToolResults) {
+  if (options.supportsImages && options.supportsMediaInToolResults) {
     return messages
   }
 
@@ -185,19 +248,32 @@ export function normalizeMessagesForModel(
   const normalized: ModelMessage[] = []
 
   for (const message of messages) {
-    if (message.role !== 'tool') {
-      normalized.push(message)
+    if (message.role === 'tool') {
+      const replacement = normalizeToolMessageForModel(
+        message,
+        options.supportsImages,
+      )
+      if (replacement.length !== 1 || replacement[0] !== message) {
+        changed = true
+      }
+      normalized.push(...replacement)
       continue
     }
 
-    const replacement = normalizeToolMessageForModel(
-      message,
-      options.supportsImages,
-    )
-    if (replacement.length !== 1 || replacement[0] !== message) {
-      changed = true
+    if (message.role === 'user' && !options.supportsImages) {
+      const sanitized = normalizeUserMessageForNonVisionModel(message)
+      if (sanitized === null) {
+        changed = true
+        continue
+      }
+      if (sanitized !== message) {
+        changed = true
+      }
+      normalized.push(sanitized)
+      continue
     }
-    normalized.push(...replacement)
+
+    normalized.push(message)
   }
 
   return changed ? normalized : messages

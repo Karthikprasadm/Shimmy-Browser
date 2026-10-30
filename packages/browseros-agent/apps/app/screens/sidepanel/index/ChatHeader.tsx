@@ -2,11 +2,13 @@ import {
   Bot,
   ChevronDown,
   Github,
+  Globe,
   History,
   Plus,
   SettingsIcon,
 } from 'lucide-react'
 import type { FC } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
@@ -62,6 +64,32 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
     navigate('/')
   }
 
+  const [activeTab, setActiveTab] = useState<{ hostname: string; favIconUrl?: string } | null>(null)
+
+  useEffect(() => {
+    const update = () => {
+      chrome.tabs
+        .query({ active: true, currentWindow: true })
+        .then(([tab]) => {
+          if (!tab?.url?.startsWith('http')) { setActiveTab(null); return }
+          try {
+            const hostname = new URL(tab.url).hostname.replace(/^www\./, '')
+            setActiveTab({ hostname, favIconUrl: tab.favIconUrl })
+          } catch {
+            setActiveTab(null)
+          }
+        })
+        .catch(() => setActiveTab(null))
+    }
+    update()
+    chrome.tabs.onActivated?.addListener(update)
+    chrome.tabs.onUpdated?.addListener(update)
+    return () => {
+      chrome.tabs.onActivated?.removeListener(update)
+      chrome.tabs.onUpdated?.removeListener(update)
+    }
+  }, [])
+
   return (
     <header
       className={cn(
@@ -82,13 +110,26 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             title="Change AI Provider"
           >
             <HeaderProviderIcon provider={selectedProvider} />
-            <span className="font-semibold text-base">
+            <span className="font-semibold text-sm leading-none">
               {selectedProvider.name}
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
           </button>
         </ChatProviderSelector>
         {selectedProvider.type === 'browseros' && <CreditsBadgeWrapper />}
+        {activeTab && (
+          <div
+            className="flex max-w-[120px] items-center gap-1.5 overflow-hidden rounded-md border border-border/60 bg-muted/40 px-1.5 py-1 text-[11px] text-muted-foreground"
+            title={activeTab.hostname}
+          >
+            {activeTab.favIconUrl ? (
+              <img src={activeTab.favIconUrl} alt="" className="h-3 w-3 shrink-0" />
+            ) : (
+              <Globe className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate">{activeTab.hostname}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1">

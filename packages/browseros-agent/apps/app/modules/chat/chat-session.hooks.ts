@@ -8,6 +8,12 @@ import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import {
+  clearActiveSession,
+  consumeRestorePending,
+  readActiveSession,
+  saveActiveSession,
+} from '@/lib/browseros/activeSessionStorage'
+import {
   conversationForTab,
   conversationPanelViewsStorage,
 } from '@/lib/browseros/conversationPanelStorage'
@@ -32,12 +38,6 @@ import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-import {
-  clearActiveSession,
-  consumeRestorePending,
-  readActiveSession,
-  saveActiveSession,
-} from '@/lib/browseros/activeSessionStorage'
 
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
@@ -64,6 +64,7 @@ import {
   restoreServerConversation,
 } from './chat-session-restore'
 import type { ChatMode } from './chat-types'
+import { focusComposerInput } from './composer-focus'
 import { addContentFilterNotice } from './content-filter-notice'
 import {
   conversationReconnectUrl,
@@ -73,6 +74,8 @@ import { useExecutionHistoryTracker } from './execution-history-tracker.hooks'
 import { PanelConversationAttachment } from './panel-conversation-attachment'
 import { toLlmProviderConfig } from './sidepanel-chat-targets'
 import { stripImageToolOutputs } from './tool-output-strip'
+
+export { focusComposerInput }
 
 const getLastMessageText = (messages: UIMessage[]) => {
   const lastMessage = messages[messages.length - 1]
@@ -511,6 +514,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   } = useChat({
     transport: chatTransport,
     onError: () => {
+      focusComposerInput()
       // A failed local POST belongs to the user's Retry action. Only mirrored
       // stream failures should rehydrate; replaying an older run here would
       // erase the failed prompt and hide the provider error in the source panel.
@@ -591,6 +595,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   }, [detachView, options?.origin])
 
   const stop = useCallback(async () => {
+    focusComposerInput()
     // First detach this view so the UI responds immediately, then cancel the
     // server-owned run explicitly. Aborting the fetch alone is intentionally
     // no longer a lifecycle signal.
@@ -615,6 +620,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     } finally {
       await detaching
+      focusComposerInput()
     }
   }, [detachView])
 
@@ -829,7 +835,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       previousStatusRef.current,
       status,
     )
+    const wasBusy =
+      previousStatusRef.current === 'streaming' ||
+      previousStatusRef.current === 'submitted'
     previousStatusRef.current = status
+
+    if (wasBusy && (status === 'ready' || status === 'error')) {
+      focusComposerInput()
+    }
 
     if (!justFinished) return
 

@@ -27,8 +27,9 @@ export const ChatModeToggle: FC<ChatModeToggleProps> = ({
           <button
             type="button"
             onClick={() => onModeChange(isAgentMode ? 'chat' : 'agent')}
+            title={isAgentMode ? 'Switch to Chat Mode' : 'Switch to Agent Mode'}
             className={cn(
-              'flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 font-medium text-xs transition-all',
+              'group flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 font-medium text-xs transition-all',
               isAgentMode
                 ? 'border-border/50 bg-muted text-muted-foreground hover:text-foreground'
                 : 'border-[var(--accent-orange)]/30 bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]',
@@ -38,11 +39,17 @@ export const ChatModeToggle: FC<ChatModeToggleProps> = ({
               <>
                 <MousePointer2 className="h-3 w-3" />
                 <span>Agent Mode ON</span>
+                <span className="max-w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover:max-w-[4rem] group-hover:opacity-60">
+                  → Chat
+                </span>
               </>
             ) : (
               <>
                 <MessageSquare className="h-3 w-3" />
                 <span>Chat Mode ON</span>
+                <span className="max-w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover:max-w-[5rem] group-hover:opacity-60">
+                  → Agent
+                </span>
               </>
             )}
           </button>

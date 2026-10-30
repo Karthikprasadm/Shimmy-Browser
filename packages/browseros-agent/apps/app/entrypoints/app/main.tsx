@@ -18,7 +18,7 @@ class AppErrorBoundary extends React.Component<
   React.PropsWithChildren,
   AppErrorBoundaryState
 > {
-  state: AppErrorBoundaryState = { hasError: false }
+  override state: AppErrorBoundaryState = { hasError: false }
 
   static getDerivedStateFromError(error: unknown): AppErrorBoundaryState {
     return {
@@ -27,13 +27,13 @@ class AppErrorBoundary extends React.Component<
     }
   }
 
-  componentDidCatch(error: unknown): void {
+  override componentDidCatch(error: unknown): void {
     // Keep the app visible with a fallback instead of rendering a blank screen.
     // biome-ignore lint/suspicious/noConsole: Log render failures for debugging (also visible in UI).
     console.error('App render error:', error)
   }
 
-  render(): React.ReactNode {
+  override render(): React.ReactNode {
     if (this.state.hasError) {
       return (
         <div className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">

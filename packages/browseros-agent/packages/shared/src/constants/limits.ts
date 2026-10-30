@@ -21,6 +21,9 @@ export const AGENT_LIMITS = {
   // Compaction estimation. `prepareStep` cannot see the system prompt (~2.5K)
   // or the tool schemas (~8-9K), so they are added as a flat overhead.
   COMPACTION_FIXED_OVERHEAD: 12_000,
+  /** Models with small context windows (e.g. 4K-8K local models) scale overhead down. */
+  COMPACTION_SMALL_WINDOW_THRESHOLD: 16_384,
+  COMPACTION_SMALL_WINDOW_OVERHEAD_RATIO: 0.25,
   // Images are counted at a flat render cost, never by their encoded length.
   COMPACTION_IMAGE_TOKEN_ESTIMATE: 1_000,
 

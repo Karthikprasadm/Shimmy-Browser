@@ -116,7 +116,7 @@ const ModeEmptyState: FC<ChatEmptyStateProps> = ({
               type="button"
               disabled={isLoading || loadError}
               onClick={() => setEditing(true)}
-              className="flex items-center justify-center gap-1.5 rounded py-2 text-muted-foreground text-xs opacity-0 transition-opacity hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait group-focus-within/prompts:opacity-100 group-hover/prompts:opacity-100 [@media(hover:none)]:opacity-100"
+              className="flex items-center justify-center gap-1.5 rounded py-2 text-muted-foreground text-xs opacity-40 transition-opacity hover:text-foreground hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait group-focus-within/prompts:opacity-100 group-hover/prompts:opacity-100 [@media(hover:none)]:opacity-100"
             >
               <Pencil aria-hidden="true" className="size-3" />
               Customize prompts

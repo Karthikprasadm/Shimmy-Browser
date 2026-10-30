@@ -148,14 +148,21 @@ function createBrowserMcpStub() {
 // the new authoritative runtime seam real at the constructor boundary without
 // repeating an unrelated lease stub in every fixture.
 const ChatService = class extends RealChatService {
-  constructor(deps: ConstructorParameters<typeof RealChatService>[0]) {
+  constructor(
+    deps: Partial<ConstructorParameters<typeof RealChatService>[0]> &
+      Record<string, unknown>,
+  ) {
     super({
-      serverPort: 32123,
-      browserMcp: createBrowserMcpStub() as never,
+      serverPort: deps.serverPort ?? 32123,
+      browserMcp: deps.browserMcp ?? (createBrowserMcpStub() as never),
       ...deps,
-    })
+    } as never)
   }
 }
+
+type ChatRequestInput = Parameters<
+  InstanceType<typeof ChatService>['processMessage']
+>[0]
 
 function createKlavisStub(
   getStatus: () => KlavisProxyStatus = () => ({
@@ -220,6 +227,7 @@ describe('ChatService activity tracking', () => {
       provider: 'openai',
       model: 'gpt-5',
       apiKey: 'test-key',
+      baseUrl: undefined,
     }))
     const fakeAgent = createFakeAgent()
     agentToReturn = fakeAgent
@@ -243,7 +251,6 @@ describe('ChatService activity tracking', () => {
       sessionStore: createSessionStore() as never,
       klavis: createKlavisStub() as never,
       browser: browser as never,
-      browserSession: { pages: {} } as never,
       serverPort: 32123,
       activity,
     })
@@ -307,7 +314,6 @@ describe('ChatService scheduled task page lifecycle', () => {
       sessionStore: sessionStore as never,
       klavis: createKlavisStub() as never,
       browser: browser as never,
-      registry: {} as never,
     })
 
     await service.processMessage(
@@ -380,7 +386,6 @@ describe('ChatService scheduled task page lifecycle', () => {
       sessionStore: sessionStore as never,
       klavis: createKlavisStub() as never,
       browser: browser as never,
-      registry: {} as never,
     })
 
     const result = await service.deleteSession(conversationId)
@@ -411,7 +416,6 @@ describe('ChatService scheduled task page lifecycle', () => {
       sessionStore: sessionStore as never,
       klavis: createKlavisStub() as never,
       browser: browser as never,
-      registry: {} as never,
     })
 
     await service.processMessage(
@@ -454,7 +458,60 @@ describe('ChatService scheduled task page lifecycle', () => {
     expect(browser.closePage).toHaveBeenCalledWith(88)
   })
 
+  it('closes the scheduled page even if message processing throws an error', async () => {
+    const browser = {
+      newPage: mock(async () => 99),
+      listPages: mock(async () => [
+        {
+          pageId: 99,
+          windowId: 12,
+        },
+      ]),
+      closePage: mock(async () => {}),
+      resolveTabIds: mock(async () => new Map<number, number>()),
+    }
+    const sessionStore = createSessionStore()
+    const service = new ChatService({
+      sessionStore: sessionStore as never,
+      klavis: createKlavisStub() as never,
+      browser: browser as never,
+    })
+
+    createAgentSpy.mockImplementationOnce(async () => {
+      throw new Error('Agent initialization failed')
+    })
+
+    await expect(
+      service.processMessage(
+        {
+          target: BROWSEROS_TARGET,
+          conversationId: crypto.randomUUID(),
+          message: 'Run failing scheduled task',
+          isScheduledTask: true,
+          mode: 'agent',
+          origin: 'sidepanel',
+        } as never,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('Agent initialization failed')
+
+    expect(browser.closePage).toHaveBeenCalledWith(99)
+  })
+
   it('rebuilds an existing session when the LLM provider changes', async () => {
+    resolveLLMConfigSpy.mockImplementation(
+      async (config: {
+        provider?: string
+        model?: string
+        apiKey?: string
+        baseUrl?: string
+      }) => ({
+        provider: config.provider ?? 'openai',
+        model: config.model ?? 'gpt-5',
+        apiKey: config.apiKey ?? 'test-key',
+        baseUrl: config.baseUrl,
+      }),
+    )
     const firstAgent = createFakeAgent()
     agentToReturn = firstAgent
     streamResponseHandler = async ({ onFinish }) => {
@@ -468,9 +525,7 @@ describe('ChatService scheduled task page lifecycle', () => {
     const sessionStore = createSessionStore()
     const service = new ChatService({
       sessionStore: sessionStore as never,
-      klavisClient: {} as never,
       browser: browser as never,
-      registry: {} as never,
     })
     const conversationId = crypto.randomUUID()
     const createCallsBefore = createAgentSpy.mock.calls.length
@@ -538,10 +593,9 @@ describe('ChatService browser tool config', () => {
       sessionStore: createSessionStore() as never,
       klavis: createKlavisStub(() => klavisStatus) as never,
       browser: browser as never,
-      browserSession: { pages: {} } as never,
     })
     const createCallsBefore = createAgentSpy.mock.calls.length
-    const request = {
+    const request: Record<string, unknown> = {
       target: BROWSEROS_TARGET,
       conversationId: crypto.randomUUID(),
       message: 'check integrations',
@@ -556,15 +610,15 @@ describe('ChatService browser tool config', () => {
         },
         enabledMcpServers: ['slack'],
       },
-    } as never
+    }
 
-    await service.processMessage(request, new AbortController().signal)
+    await service.processMessage(request as never, new AbortController().signal)
 
     agentToReturn = secondAgent
     klavisStatus = { state: 'ready', toolCount: 0 }
 
     await service.processMessage(
-      { ...request, message: 'check integrations again' },
+      { ...request, message: 'check integrations again' } as never,
       new AbortController().signal,
     )
 
@@ -610,11 +664,10 @@ describe('ChatService Klavis session rebuilds', () => {
       sessionStore: sessionStore as never,
       klavis: createKlavisStub(() => klavisStatus) as never,
       browser: browser as never,
-      registry: {} as never,
     })
     const createCallsBefore = createAgentSpy.mock.calls.length
     const conversationId = crypto.randomUUID()
-    const request = {
+    const request: Record<string, unknown> = {
       target: BROWSEROS_TARGET,
       conversationId,
       message: 'check integrations',
@@ -629,15 +682,15 @@ describe('ChatService Klavis session rebuilds', () => {
         },
         enabledMcpServers: ['slack'],
       },
-    } as never
+    }
 
-    await service.processMessage(request, new AbortController().signal)
+    await service.processMessage(request as never, new AbortController().signal)
 
     agentToReturn = secondAgent
     klavisStatus = { state: 'ready', toolCount: 0 }
 
     await service.processMessage(
-      { ...request, message: 'check integrations again' },
+      { ...request, message: 'check integrations again' } as never,
       new AbortController().signal,
     )
 
@@ -690,11 +743,10 @@ describe('ChatService Klavis session rebuilds', () => {
       sessionStore: sessionStore as never,
       klavis: createKlavisStub(() => klavisStatus) as never,
       browser: browser as never,
-      registry: {} as never,
     })
     const createCallsBefore = createAgentSpy.mock.calls.length
     const conversationId = crypto.randomUUID()
-    const request = {
+    const request: Record<string, unknown> = {
       target: BROWSEROS_TARGET,
       conversationId,
       message: 'check browser only',
@@ -708,15 +760,15 @@ describe('ChatService Klavis session rebuilds', () => {
           title: 'Example',
         },
       },
-    } as never
+    }
 
-    await service.processMessage(request, new AbortController().signal)
+    await service.processMessage(request as never, new AbortController().signal)
 
     agentToReturn = secondAgent
     klavisStatus = { state: 'ready', toolCount: 0 }
 
     await service.processMessage(
-      { ...request, message: 'check browser only again' },
+      { ...request, message: 'check browser only again' } as never,
       new AbortController().signal,
     )
 
@@ -738,6 +790,7 @@ describe('ChatService chat/agent mode switches', () => {
       provider: 'openai',
       model: 'gpt-5',
       apiKey: 'test-key',
+      baseUrl: undefined,
     }))
   })
 
@@ -753,11 +806,13 @@ describe('ChatService chat/agent mode switches', () => {
       sessionStore: createSessionStore() as never,
       klavis: createKlavisStub() as never,
       browser: browser as never,
-      registry: {} as never,
     })
   }
 
-  function modeRequest(conversationId: string, mode: 'chat' | 'agent') {
+  function modeRequest(
+    conversationId: string,
+    mode: 'chat' | 'agent',
+  ): ChatRequestInput {
     return {
       target: BROWSEROS_TARGET,
       conversationId,
@@ -768,7 +823,7 @@ describe('ChatService chat/agent mode switches', () => {
       browserContext: {
         activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
       },
-    } as never
+    } as unknown as ChatRequestInput
   }
 
   it('rebuilds the session when the user switches from chat to agent', async () => {
@@ -890,6 +945,7 @@ describe('ChatService single-rebuild reconciliation', () => {
       provider: 'openai',
       model: 'gpt-5',
       apiKey: 'test-key',
+      baseUrl: undefined,
     }))
   })
 
@@ -905,7 +961,6 @@ describe('ChatService single-rebuild reconciliation', () => {
       sessionStore: createSessionStore() as never,
       klavis: createKlavisStub(getKlavis) as never,
       browser: browser as never,
-      registry: {} as never,
     })
   }
 
@@ -1061,6 +1116,7 @@ describe('ChatService history persistence', () => {
       provider: 'openai',
       model: 'gpt-5',
       apiKey: 'test-key',
+      baseUrl: undefined,
     }))
   })
 
@@ -1074,7 +1130,7 @@ describe('ChatService history persistence', () => {
   function browserOsRequest(
     conversationId: string,
     historyMode: 'local' | 'cloud',
-  ) {
+  ): ChatRequestInput {
     return {
       target: BROWSEROS_TARGET,
       conversationId,
@@ -1086,7 +1142,7 @@ describe('ChatService history persistence', () => {
       browserContext: {
         activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
       },
-    } as never
+    } as unknown as ChatRequestInput
   }
 
   it('hydrates from and persists to the store in local mode', async () => {
@@ -1121,7 +1177,7 @@ describe('ChatService history persistence', () => {
         createdAt: 1,
         updatedAt: 1,
       })),
-      save: mock(async () => ({
+      save: mock(async (_record?: unknown) => ({
         id: 'stored',
         targetType: 'browseros',
         lastMessagedAt: 1,
@@ -1163,7 +1219,7 @@ describe('ChatService history persistence', () => {
     }
     const conversationStore = {
       get: mock(async () => null),
-      save: mock(async () => ({
+      save: mock(async (_record?: unknown) => ({
         id: 'stored',
         targetType: 'browseros',
         lastMessagedAt: 1,
@@ -1201,7 +1257,7 @@ describe('ChatService history persistence', () => {
     }
     const conversationStore = {
       get: mock(async () => null),
-      save: mock(async () => ({
+      save: mock(async (_record?: unknown) => ({
         id: 'stored',
         targetType: 'browseros',
         lastMessagedAt: 1,
@@ -1254,7 +1310,7 @@ describe('ChatService history persistence', () => {
         createdAt: 1,
         updatedAt: 1,
       })),
-      save: mock(async () => ({
+      save: mock(async (_record?: unknown) => ({
         id: 'stored',
         targetType: 'browseros',
         lastMessagedAt: 1,

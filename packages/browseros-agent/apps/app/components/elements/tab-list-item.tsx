@@ -32,8 +32,15 @@ export const TabListItem: FC<TabListItemProps> = ({
       </div>
       <TabFavicon url={tab.favIconUrl} />
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-foreground text-xs">
-          {tab.title}
+        <div className="flex items-center gap-1.5">
+          <span className="truncate font-medium text-foreground text-xs">
+            {tab.title}
+          </span>
+          {isSelected && (
+            <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-0.2 font-medium text-[9px] text-emerald-600 dark:text-emerald-400">
+              Lease #{tab.id}
+            </span>
+          )}
         </div>
         <div className="truncate text-[10px] text-muted-foreground">
           {tab.url}

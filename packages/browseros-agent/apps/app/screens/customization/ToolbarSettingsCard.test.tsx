@@ -182,6 +182,13 @@ mock.module('@/lib/browseros/capabilities', () => ({
   resolveStaticFeatureSupport,
 }))
 
+mock.module('@/lib/startup/startup-storage', () => ({
+  openBrowserOSHomeOnStartupStorage: {
+    getValue: async () => true,
+    setValue: async () => {},
+  },
+}))
+
 let ToolbarSettingsCard: FC
 let loadToolbarSettingsState: typeof import('./ToolbarSettingsCard').loadToolbarSettingsState
 

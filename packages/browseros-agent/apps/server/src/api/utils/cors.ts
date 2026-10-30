@@ -49,6 +49,39 @@ function normalizeTrustedOrigin(value: string): string | null {
   }
 }
 
+export const LOOPBACK_HOSTS = new Set([
+  '127.0.0.1',
+  'localhost',
+  '[::1]',
+  '::1',
+])
+
+export const LOOPBACK_HOST_VARIANTS = [
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+] as const
+
+function expandLoopbackOrigins(origins: string[]): string[] {
+  const result: string[] = []
+  for (const origin of origins) {
+    result.push(origin)
+    try {
+      const url = new URL(origin)
+      if (LOOPBACK_HOSTS.has(url.hostname)) {
+        for (const variant of LOOPBACK_HOST_VARIANTS) {
+          result.push(
+            `${url.protocol}//${variant}${url.port ? `:${url.port}` : ''}`,
+          )
+        }
+      }
+    } catch {
+      // Non-parseable or special scheme, keep as-is
+    }
+  }
+  return result
+}
+
 function buildAllowedOrigins(): Set<string> {
   const fromEnv = (process.env.BROWSEROS_TRUSTED_ORIGINS ?? '')
     .split(',')
@@ -56,7 +89,7 @@ function buildAllowedOrigins(): Set<string> {
     .filter((value) => value.length > 0)
     .map(normalizeTrustedOrigin)
     .filter((value): value is string => value !== null)
-  return new Set([...STATIC_ALLOWED_ORIGINS, ...fromEnv])
+  return new Set([...STATIC_ALLOWED_ORIGINS, ...expandLoopbackOrigins(fromEnv)])
 }
 
 function getAllowedOrigins(): Set<string> {
@@ -71,7 +104,30 @@ export function resetAllowedOriginsForTesting(): void {
 }
 
 export function isAllowedOrigin(origin: string): boolean {
-  return getAllowedOrigins().has(origin)
+  const allowed = getAllowedOrigins()
+  if (allowed.has(origin)) {
+    return true
+  }
+
+  try {
+    const url = new URL(origin)
+    if (url.origin !== origin) {
+      return false
+    }
+
+    if (LOOPBACK_HOSTS.has(url.hostname)) {
+      for (const variant of LOOPBACK_HOST_VARIANTS) {
+        const candidate = `${url.protocol}//${variant}${url.port ? `:${url.port}` : ''}`
+        if (allowed.has(candidate)) {
+          return true
+        }
+      }
+    }
+  } catch {
+    // Malformed origin URL
+  }
+
+  return false
 }
 
 export const defaultCorsConfig: CorsOptions = {

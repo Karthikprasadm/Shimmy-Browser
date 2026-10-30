@@ -21,3 +21,46 @@ export function mapTopSitesToRecentSites(
     return { name: site.title, url: site.url, host }
   })
 }
+
+export const DEFAULT_POPULAR_SITES: readonly RecentSite[] = [
+  {
+    name: 'GitHub',
+    url: 'https://github.com',
+    host: 'github.com',
+  },
+  {
+    name: 'Docs',
+    url: 'https://docs.browseros.com',
+    host: 'docs.browseros.com',
+  },
+  {
+    name: 'Shimmy Home',
+    url: 'https://browseros.com',
+    host: 'browseros.com',
+  },
+  {
+    name: 'MDN Web Docs',
+    url: 'https://developer.mozilla.org',
+    host: 'developer.mozilla.org',
+  },
+  {
+    name: 'ChatGPT',
+    url: 'https://chatgpt.com',
+    host: 'chatgpt.com',
+  },
+  {
+    name: 'Google',
+    url: 'https://google.com',
+    host: 'google.com',
+  },
+  {
+    name: 'Stack Overflow',
+    url: 'https://stackoverflow.com',
+    host: 'stackoverflow.com',
+  },
+  {
+    name: 'YouTube',
+    url: 'https://youtube.com',
+    host: 'youtube.com',
+  },
+]

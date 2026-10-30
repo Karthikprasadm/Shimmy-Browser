@@ -30,4 +30,13 @@ describe('mapTopSitesToRecentSites', () => {
     }))
     expect(mapTopSitesToRecentSites(sites, 5)).toHaveLength(5)
   })
+
+  it('provides default popular developer bookmarks for empty state fallback', async () => {
+    const { DEFAULT_POPULAR_SITES } = await import('./recent-sites.helpers')
+    expect(DEFAULT_POPULAR_SITES.length).toBeGreaterThanOrEqual(5)
+    const names = DEFAULT_POPULAR_SITES.map((s) => s.name)
+    expect(names).toContain('GitHub')
+    expect(names).toContain('Docs')
+    expect(names).toContain('Shimmy Home')
+  })
 })

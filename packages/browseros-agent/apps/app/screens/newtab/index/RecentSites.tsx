@@ -29,17 +29,17 @@ const RecentSiteIcon: FC<{ src: string; alt: string }> = ({ src, alt }) => {
 }
 
 export const RecentSites: FC = () => {
-  const recentSites = useRecentSites()
+  const { sites, isFallback } = useRecentSites()
 
-  if (!recentSites.length) return null
+  if (!sites.length) return null
 
   return (
     <div className="space-y-4">
       <h2 className="text-center font-medium text-muted-foreground text-xs uppercase tracking-wide">
-        Recent sites
+        {isFallback ? 'Popular sites' : 'Recent sites'}
       </h2>
       <div className="flex flex-wrap items-center justify-center gap-6">
-        {recentSites.map((site) => {
+        {sites.map((site) => {
           const icon = site.host ? getFavicons(site.host) : undefined
           return (
             <a
@@ -64,3 +64,6 @@ export const RecentSites: FC = () => {
     </div>
   )
 }
+
+export const RecentVisitsGrid = RecentSites
+export default RecentSites

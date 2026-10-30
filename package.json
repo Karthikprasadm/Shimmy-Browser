@@ -6,6 +6,8 @@
     "start": "bun packages/browseros-agent/scripts/dev/stack.ts",
     "build:agent:dev": "bun run --filter @browseros/app build:dev",
     "build:agent": "bun run --filter @browseros/app build",
-    "build": "bun run --filter @browseros/app build"
+    "build": "bun run --filter @browseros/app build",
+    "typecheck": "cd packages/browseros-agent && bun run typecheck",
+    "test": "cd packages/browseros-agent && bun test"
   }
 }

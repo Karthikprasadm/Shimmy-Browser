@@ -44,14 +44,14 @@ const defaults: Record<ChatMode, StarterPrompt[]> = {
   ],
   agent: [
     {
-      display: 'Read about our vision and upvote',
+      display: 'Explore Shimmy repository',
       prompt:
-        'Go to https://dub.sh/browseros-launch in current tab. Find and click the upvote button',
+        'Go to https://github.com/Karthikprasadm/Shimmy-Browser in current tab and explore the features',
     },
     {
-      display: 'Support BrowserOS on Github',
+      display: 'Support Shimmy on GitHub',
       prompt:
-        'Go to http://git.new/browseros in current tab and star the repository',
+        'Go to https://github.com/Karthikprasadm/Shimmy-Browser in current tab and star the repository',
     },
     {
       display: 'Open amazon.com and order Sensodyne toothpaste',

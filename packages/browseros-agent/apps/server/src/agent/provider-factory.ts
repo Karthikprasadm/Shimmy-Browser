@@ -105,7 +105,7 @@ function createLMStudioFactory(
   return createOpenAICompatible({
     ...(config.headers && { headers: config.headers }),
     name: 'lmstudio',
-    baseURL: config.baseUrl,
+    baseURL: config.baseUrl.trim().replace(/\/+$/, ''),
     ...(config.apiKey && { apiKey: config.apiKey }),
   })
 }
@@ -117,7 +117,7 @@ function createOllamaFactory(
   return createOpenAICompatible({
     ...(config.headers && { headers: config.headers }),
     name: 'ollama',
-    baseURL: config.baseUrl,
+    baseURL: config.baseUrl.trim().replace(/\/+$/, ''),
     ...(config.apiKey && { apiKey: config.apiKey }),
   })
 }

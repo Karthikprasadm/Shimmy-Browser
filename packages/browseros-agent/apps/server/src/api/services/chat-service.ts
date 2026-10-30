@@ -123,9 +123,9 @@ export class ChatService {
           : conversationTabGroup(request),
         createStream: async (abortSignal, _runId, updateMessages) => {
           if (
-            request.target.type === 'claude' ||
-            request.target.type === 'codex' ||
-            request.target.type === 'custom'
+            request.target?.type === 'claude' ||
+            request.target?.type === 'codex' ||
+            request.target?.type === 'custom'
           ) {
             return await this.processAcpMessage(
               request as AcpChatRequest,
@@ -357,24 +357,31 @@ export class ChatService {
         }
       }
 
-      const outputFileAccess = createBrowserOutputFileAccess()
-      const { agent, browserToolLease } = await this.createBrowserOsAgent(
-        agentConfig,
-        browserContext,
-        outputFileAccess,
-      )
-      session = {
-        agent,
-        browserToolLease,
-        scheduledPageId,
-        browserContext,
-        mcpServerKey,
-        workingDir: request.userWorkingDir,
-        llmConfigKey,
-        chatMode: requestChatMode,
-        outputFileAccess,
+      try {
+        const outputFileAccess = createBrowserOutputFileAccess()
+        const { agent, browserToolLease } = await this.createBrowserOsAgent(
+          agentConfig,
+          browserContext,
+          outputFileAccess,
+        )
+        session = {
+          agent,
+          browserToolLease,
+          scheduledPageId,
+          browserContext,
+          mcpServerKey,
+          workingDir: request.userWorkingDir,
+          llmConfigKey,
+          chatMode: requestChatMode,
+          outputFileAccess,
+        }
+        sessionStore.set(request.conversationId, session)
+      } catch (error) {
+        if (scheduledPageId) {
+          this.closeScheduledPage(scheduledPageId, request.conversationId)
+        }
+        throw error
       }
-      sessionStore.set(request.conversationId, session)
     }
 
     if (isNewSession) {
@@ -526,6 +533,11 @@ export class ChatService {
 
       return stream
     } catch (error) {
+      if (session?.scheduledPageId) {
+        const pageId = session.scheduledPageId
+        session.scheduledPageId = undefined
+        this.closeScheduledPage(pageId, request.conversationId)
+      }
       session.agent.messages = messagesBeforeTurn
       updateMessages(messagesBeforeTurn)
       throw error
@@ -868,6 +880,29 @@ export class ChatService {
     }
   }
 
+  private buildLlmConfigKey(config: ResolvedAgentConfig): string {
+    return JSON.stringify({
+      provider: config.provider,
+      providerId: config.providerId,
+      model: config.model,
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      headers: config.headers,
+      upstreamProvider: config.upstreamProvider,
+      resourceName: config.resourceName,
+      region: config.region,
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      sessionToken: config.sessionToken,
+      accountId: config.accountId,
+      reasoningEffort: config.reasoningEffort,
+      reasoningSummary: config.reasoningSummary,
+      contextWindowSize: config.contextWindowSize,
+      supportsImages: config.supportsImages,
+      supportsReasoning: config.supportsReasoning,
+    })
+  }
+
   private buildMcpServerKey(browserContext?: BrowserContext): string {
     const managed = browserContext?.enabledMcpServers?.slice().sort() ?? []
     const custom =
@@ -898,9 +933,9 @@ function conversationTabGroup(
 ): ConversationTabGroupPresentation {
   const words = request.message.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
   const task = words.slice(0, 5).join('-').slice(0, 40) || 'task'
-  const prefix = request.target.type
+  const prefix = request.target?.type ?? 'browseros'
   const colorKey =
-    request.target.type === 'browseros'
+    !request.target || request.target.type === 'browseros'
       ? 'browseros'
       : `${request.target.type}:${request.target.agentId}`
   return { title: `${prefix}/${task}`, colorKey }

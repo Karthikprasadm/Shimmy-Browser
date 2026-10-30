@@ -120,7 +120,7 @@ export const SidebarBranding: FC<SidebarBrandingProps> = ({
                     : 'font-medium text-primary',
                 )}
               >
-                {isLoggedIn ? 'Personal' : 'Sign in'}
+                {isLoggedIn ? selectedFolder?.name || 'Personal' : 'Sign in'}
               </span>
             </div>
           </button>

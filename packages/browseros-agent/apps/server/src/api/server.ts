@@ -10,7 +10,7 @@ import { toChatError } from '../agent/chat-error'
 import { HttpAgentError } from '../agent/errors'
 import { INLINED_ENV } from '../env'
 import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
-import { getDb } from '../lib/db'
+import { getDb, getDbHandle } from '../lib/db'
 import { logger } from '../lib/logger'
 import { Sentry } from '../lib/sentry'
 import { createApiRoutes } from './routes'
@@ -43,9 +43,12 @@ async function assertPortAvailable(port: number): Promise<void> {
 }
 
 /** Creates the Hono app and Bun server after wiring process-level dependencies. */
-export async function createHttpServer(config: HttpServerConfig) {
-  const { port, host = '0.0.0.0', browserosId } = config
-  const { onShutdown } = config
+export async function createHttpServer(config: HttpServerConfig): Promise<{
+  server: ReturnType<typeof Bun.serve>
+  app: unknown
+  config: HttpServerConfig
+}> {
+  const { port, host, browserosId, onShutdown } = config
 
   const tokenManager = browserosId
     ? initializeOAuth(getDb(), browserosId)
@@ -56,6 +59,12 @@ export async function createHttpServer(config: HttpServerConfig) {
   klavis.start()
 
   const activity = new ServerActivity()
+  try {
+    const dbHandle = getDbHandle()
+    dbHandle.setActivityTracker(() => activity.isBusy())
+  } catch {
+    // Database might not be initialized in some test harnesses
+  }
 
   const app = createApiRoutes({
     config: { ...config, activity },
@@ -65,6 +74,11 @@ export async function createHttpServer(config: HttpServerConfig) {
     klavis,
     tokenManager,
     onShutdown: () => {
+      try {
+        getDbHandle().stopAutoCheckpoint()
+      } catch {
+        // Non-blocking cleanup
+      }
       shutdownOAuth()
       void klavis.stop()
       onShutdown?.()

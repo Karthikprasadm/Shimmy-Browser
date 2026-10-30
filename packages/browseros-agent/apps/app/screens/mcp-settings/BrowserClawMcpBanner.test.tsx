@@ -38,9 +38,13 @@ mock.module('@/lib/sentry/sentry', () => ({
   },
 }))
 
-mock.module('@/lib/constants/analyticsEvents', () => ({
-  BROWSERCLAW_MCP_BANNER_CLICKED_EVENT,
-}))
+mock.module('@/lib/constants/analyticsEvents', () => {
+  const actual = require('../../lib/constants/analyticsEvents')
+  return {
+    ...actual,
+    BROWSERCLAW_MCP_BANNER_CLICKED_EVENT,
+  }
+})
 
 mock.module('@/components/ui/button', () => ({
   Button: ({

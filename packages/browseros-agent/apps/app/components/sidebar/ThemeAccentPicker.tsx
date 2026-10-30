@@ -1,7 +1,6 @@
 import type { FC, PointerEvent as ReactPointerEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Popover,
   PopoverContent,
@@ -145,17 +144,27 @@ const ThemeColorPickerPanel: FC<{
 
   return (
     <div className="flex flex-col gap-3.5">
-      <canvas
-        ref={canvasRef}
-        width={260}
-        height={152}
-        className="w-full cursor-crosshair touch-none rounded-xl border border-border/80 bg-muted/20 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
-        onPointerDown={onSvPointerDown}
-        onPointerMove={onSvPointerMove}
-        onPointerUp={onSvPointerUp}
-        onPointerLeave={onSvPointerUp}
-        aria-label="Saturation and brightness"
-      />
+      <div className="relative w-full">
+        <canvas
+          ref={canvasRef}
+          width={260}
+          height={152}
+          className="w-full cursor-crosshair touch-none rounded-xl border border-border/80 bg-muted/20 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]"
+          onPointerDown={onSvPointerDown}
+          onPointerMove={onSvPointerMove}
+          onPointerUp={onSvPointerUp}
+          onPointerLeave={onSvPointerUp}
+          aria-label="Saturation and brightness"
+        />
+        {/* Crosshair cursor — positioned at current (sat, val) */}
+        <div
+          className="pointer-events-none absolute h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-[0_0_0_1.5px_rgba(0,0,0,0.55),inset_0_0_0_1px_rgba(255,255,255,0.3)]"
+          style={{
+            left: `${sat * 100}%`,
+            top: `${(1 - val) * 100}%`,
+          }}
+        />
+      </div>
       <div
         className="relative h-2.5 w-full overflow-hidden rounded-full border border-border/70 shadow-inner"
         style={{
@@ -187,16 +196,23 @@ const ThemeColorPickerPanel: FC<{
           className="size-8 shrink-0 rounded-full border border-border/90 shadow-sm ring-1 ring-black/[0.06]"
           style={{ backgroundColor: previewHex }}
         />
-        <Input
-          value={hexInput}
-          onChange={(e) => setHexInput(e.target.value)}
-          onBlur={applyHexInput}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') applyHexInput()
-          }}
-          className="h-9 flex-1 rounded-lg border-border/90 bg-background/70 font-mono text-foreground text-xs shadow-sm"
-          spellCheck={false}
-        />
+        <div className="flex h-9 flex-1 overflow-hidden rounded-lg border border-border/90 bg-background/70 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+          <span className="flex select-none items-center border-border/60 border-r bg-muted/50 px-2.5 font-mono text-muted-foreground text-xs">
+            #
+          </span>
+          <input
+            value={hexInput.replace(/^#/, '')}
+            onChange={(e) => setHexInput(e.target.value.replace(/^#/, ''))}
+            onBlur={applyHexInput}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') applyHexInput()
+            }}
+            className="min-w-0 flex-1 bg-transparent px-2 font-mono text-foreground text-xs outline-none placeholder:text-muted-foreground"
+            spellCheck={false}
+            maxLength={6}
+            placeholder="ffffff"
+          />
+        </div>
       </div>
       <div className="flex justify-end gap-2 border-border/50 border-t pt-3">
         <Button

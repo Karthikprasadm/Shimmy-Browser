@@ -6,11 +6,17 @@
 import { Database as BunDatabase } from 'bun:sqlite'
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+} from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { closeDb, initializeDb } from '../../../src/lib/db'
+import { checkpointDb, closeDb, initializeDb } from '../../../src/lib/db'
 import { providers } from '../../../src/lib/db/schema'
 
 describe('database initialization', () => {
@@ -18,10 +24,18 @@ describe('database initialization', () => {
 
   afterEach(async () => {
     closeDb()
-    await Promise.all(
-      tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
-    )
+    const dirs = [...tempDirs]
     tempDirs.length = 0
+    await Promise.all(
+      dirs.map((dir) =>
+        rm(dir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        }).catch(() => {}),
+      ),
+    )
   })
 
   it('creates the parent directory, opens sqlite, and runs migrations', () => {
@@ -43,6 +57,102 @@ describe('database initialization', () => {
     const second = initializeDb({ dbPath })
 
     expect(second).toBe(first)
+  })
+
+  it('configures busy_timeout with default 10000ms', () => {
+    const dir = mkTempDir()
+    const dbPath = join(dir, 'browseros.sqlite')
+
+    const handle = initializeDb({ dbPath })
+    const timeout = handle.sqlite
+      .query<{ timeout: number }, []>('PRAGMA busy_timeout')
+      .get()
+
+    expect(timeout?.timeout).toBe(10_000)
+  })
+
+  it('configures busy_timeout with custom value when provided', () => {
+    const dir = mkTempDir()
+    const dbPath = join(dir, 'browseros.sqlite')
+
+    const handle = initializeDb({ dbPath, busyTimeout: 25_000 })
+    const timeout = handle.sqlite
+      .query<{ timeout: number }, []>('PRAGMA busy_timeout')
+      .get()
+
+    expect(timeout?.timeout).toBe(25_000)
+  })
+
+  it('executes PRAGMA wal_checkpoint(PASSIVE) and returns checkpoint counts', () => {
+    const dir = mkTempDir()
+    const dbPath = join(dir, 'browseros.sqlite')
+
+    const handle = initializeDb({ dbPath })
+    handle.db
+      .insert(providers)
+      .values({
+        id: 'test-checkpoint',
+        kind: 'llm',
+        type: 'openai',
+        name: 'Test',
+        modelId: 'gpt-5',
+        contextWindow: 128000,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .run()
+
+    const result = handle.checkpoint('PASSIVE')
+    expect(result.busy).toBe(0)
+    expect(result.log).toBeGreaterThanOrEqual(0)
+    expect(result.checkpointed).toBeGreaterThanOrEqual(0)
+
+    const moduleResult = checkpointDb('PASSIVE')
+    expect(moduleResult.busy).toBe(0)
+  })
+
+  it('runs periodic auto-checkpoint when idle and defers when busy', async () => {
+    const dir = mkTempDir()
+    const dbPath = join(dir, 'browseros.sqlite')
+
+    let busy = true
+    const handle = initializeDb({
+      dbPath,
+      walAutoCheckpoint: {
+        intervalMs: 30,
+        isBusy: () => busy,
+      },
+    })
+
+    const initialCheckpoint = handle.checkpoint('PASSIVE')
+    expect(initialCheckpoint.busy).toBe(0)
+
+    // While busy, wait 70ms to ensure ticks occur but checkpoint does not throw
+    await new Promise((r) => setTimeout(r, 70))
+
+    // Switch to idle and dynamically update activity tracker
+    busy = false
+    handle.setActivityTracker(() => busy)
+
+    await new Promise((r) => setTimeout(r, 70))
+
+    // Stopping auto-checkpoint stops timer cleanly
+    handle.stopAutoCheckpoint()
+  })
+
+  it('resolves packaged migrations from nested resources directory candidates', () => {
+    const dir = mkTempDir()
+    const resourcesDir = join(dir, 'app-root')
+    const nestedMigrations = join(resourcesDir, 'resources', 'db', 'migrations')
+    const sourceDir = join(import.meta.dir, '../../../src/lib/db/migrations')
+    cpSync(sourceDir, nestedMigrations, { recursive: true })
+
+    const handle = initializeDb({
+      dbPath: join(dir, 'browseros.sqlite'),
+      resourcesDir,
+    })
+
+    expect(handle.migrationsDir).toBe(nestedMigrations)
   })
 
   it.each([false, true])(
@@ -275,7 +385,8 @@ const expectedMigrationHistory = JSON.parse(
           import.meta.dir,
           `../../../src/lib/db/migrations/${entry.tag}.sql`,
         ),
-      ),
+        'utf8',
+      ).replace(/\r\n/g, '\n'),
     )
     .digest('hex'),
   createdAt: entry.when,

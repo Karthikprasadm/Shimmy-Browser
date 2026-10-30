@@ -19,6 +19,7 @@ import { ChatError } from './ChatError'
 import { ChatFooter } from './ChatFooter'
 import { ChatMessages } from './ChatMessages'
 import { IncognitoNotice } from './IncognitoNotice'
+import type { ModeSwitchNotice } from './ModeResetNotice'
 
 /**
  * @public
@@ -59,10 +60,18 @@ export const Chat = () => {
   const [input, setInput] = useState('')
   const [attachedTabs, setAttachedTabs] = useState<chrome.tabs.Tab[]>([])
   const [mounted, setMounted] = useState(false)
+  const [modeNotices, setModeNotices] = useState<ModeSwitchNotice[]>([])
 
   useEffect(() => {
     setMounted(true)
   }, [])
+
+  // Clear mode notices when starting a fresh conversation
+  useEffect(() => {
+    if (messages.length === 0) {
+      setModeNotices([])
+    }
+  }, [messages.length])
 
   useEffect(() => {
     ;(async () => {
@@ -92,6 +101,17 @@ export const Chat = () => {
   }, [status])
 
   const handleModeChange = (newMode: ChatMode) => {
+    if (newMode !== mode && messages.length > 0) {
+      setModeNotices((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          afterMessageId: messages[messages.length - 1]?.id,
+          from: mode,
+          to: newMode,
+        },
+      ])
+    }
     track(SIDEPANEL_MODE_CHANGED_EVENT, { from: mode, to: newMode })
     setMode(newMode)
   }
@@ -180,6 +200,7 @@ export const Chat = () => {
           <ChatMessages
             messages={messages}
             status={status}
+            modeNotices={modeNotices}
             getActionForMessage={getActionForMessage}
             liked={liked}
             onClickLike={onClickLike}

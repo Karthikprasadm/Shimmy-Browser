@@ -1,5 +1,6 @@
 import { type FC, useCallback, useEffect, useState } from 'react'
 import { getMcpServerUrl } from '@/lib/browseros/helpers'
+import { useGetUserMCPIntegrations } from '@/modules/mcp/user-integrations.hooks'
 import { BrowserClawMcpBanner } from './BrowserClawMcpBanner'
 import { IntegrationsSection } from './IntegrationsSection'
 import { MCPServerHeader } from './MCPServerHeader'
@@ -10,6 +11,11 @@ export const MCPSettingsPage: FC = () => {
   const [serverUrl, setServerUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(true)
   const [urlError, setUrlError] = useState<string | null>(null)
+  const {
+    klavisStatus,
+    mutate: refetchKlavis,
+    isFetching: isKlavisFetching,
+  } = useGetUserMCPIntegrations()
 
   const loadServerUrl = useCallback(async () => {
     setUrlLoading(true)
@@ -33,7 +39,10 @@ export const MCPSettingsPage: FC = () => {
         serverUrl={serverUrl}
         isLoading={urlLoading}
         error={urlError}
+        klavisStatus={klavisStatus}
         onServerRestart={loadServerUrl}
+        onRetryKlavis={() => refetchKlavis()}
+        isRetryingKlavis={isKlavisFetching}
       />
 
       <BrowserClawMcpBanner />

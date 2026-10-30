@@ -186,7 +186,8 @@ function fromMessage(message: string, providerType?: string): ChatErrorView {
   // Detect Shimmy rate limit (Shimmy provider only)
   if (
     isBrowserosProvider &&
-    message.includes('Shimmy LLM daily limit reached')
+    (message.includes('Shimmy LLM daily limit reached') ||
+      message.includes('BrowserOS LLM daily limit reached'))
   ) {
     return {
       title: 'Daily limit reached',

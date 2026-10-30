@@ -19,11 +19,30 @@ interface DrizzleJournalEntry {
   tag: string
 }
 
+export type WalCheckpointMode = 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE'
+
+export interface WalCheckpointResult {
+  busy: number
+  log: number
+  checkpointed: number
+}
+
+export interface WalAutoCheckpointConfig {
+  enabled?: boolean
+  intervalMs?: number
+  isBusy?: () => boolean
+  mode?: WalCheckpointMode
+}
+
 export interface DbHandle {
   path: string
   migrationsDir: string | null
   sqlite: BunDatabase
   db: BrowserOsDatabase
+  checkpoint: (mode?: WalCheckpointMode) => WalCheckpointResult
+  startAutoCheckpoint: (config?: WalAutoCheckpointConfig) => () => void
+  stopAutoCheckpoint: () => void
+  setActivityTracker: (isBusy: () => boolean) => void
 }
 
 export interface OpenDbOptions {
@@ -31,6 +50,29 @@ export interface OpenDbOptions {
   resourcesDir?: string
   migrationsDir?: string
   runMigrations?: boolean
+  busyTimeout?: number
+  walAutoCheckpoint?: boolean | WalAutoCheckpointConfig
+}
+
+/** Executes a PRAGMA wal_checkpoint on the SQLite database without throwing errors. */
+export function checkpointWal(
+  sqlite: BunDatabase,
+  mode: WalCheckpointMode = 'PASSIVE',
+): WalCheckpointResult {
+  try {
+    const row = sqlite
+      .query<{ busy: number; log: number; checkpointed: number }, []>(
+        `PRAGMA wal_checkpoint(${mode})`,
+      )
+      .get()
+    return row ?? { busy: 0, log: 0, checkpointed: 0 }
+  } catch (error) {
+    logger.warn('Failed to checkpoint SQLite WAL', {
+      mode,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return { busy: 1, log: -1, checkpointed: -1 }
+  }
 }
 
 const sourceMigrationsDir = fileURLToPath(
@@ -43,6 +85,8 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
   mkdirSync(dirname(options.dbPath), { recursive: true })
 
   const sqlite = new BunDatabase(options.dbPath)
+  const busyTimeout = options.busyTimeout ?? 10_000
+  sqlite.exec(`PRAGMA busy_timeout = ${busyTimeout}`)
   sqlite.exec('PRAGMA journal_mode = WAL')
   sqlite.exec('PRAGMA foreign_keys = ON')
 
@@ -61,11 +105,76 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
     }
   }
 
+  let isBusyTracker: (() => boolean) | undefined =
+    typeof options.walAutoCheckpoint === 'object'
+      ? options.walAutoCheckpoint.isBusy
+      : undefined
+
+  let checkpointTimer: ReturnType<typeof setInterval> | null = null
+
+  const stopAutoCheckpoint = () => {
+    if (checkpointTimer !== null) {
+      clearInterval(checkpointTimer)
+      checkpointTimer = null
+    }
+  }
+
+  const startAutoCheckpoint = (config?: WalAutoCheckpointConfig) => {
+    stopAutoCheckpoint()
+    if (config?.isBusy) {
+      isBusyTracker = config.isBusy
+    }
+    const intervalMs = config?.intervalMs ?? 60_000
+    const mode = config?.mode ?? 'PASSIVE'
+
+    checkpointTimer = setInterval(() => {
+      if (isBusyTracker?.()) {
+        logger.debug('Skipping SQLite WAL checkpoint during busy server period')
+        return
+      }
+      const result = checkpointWal(sqlite, mode)
+      if (result.checkpointed > 0 || result.log > 0) {
+        logger.debug('Periodic SQLite WAL checkpoint completed', {
+          mode,
+          ...result,
+        })
+      }
+    }, intervalMs)
+
+    if (typeof checkpointTimer.unref === 'function') {
+      checkpointTimer.unref()
+    }
+
+    return stopAutoCheckpoint
+  }
+
+  const autoCheckpointOption = options.walAutoCheckpoint
+  const shouldAutoCheckpoint =
+    autoCheckpointOption === undefined
+      ? true
+      : typeof autoCheckpointOption === 'boolean'
+        ? autoCheckpointOption
+        : autoCheckpointOption.enabled !== false
+
+  if (shouldAutoCheckpoint) {
+    startAutoCheckpoint(
+      typeof autoCheckpointOption === 'object'
+        ? autoCheckpointOption
+        : undefined,
+    )
+  }
+
   return {
     path: options.dbPath,
     migrationsDir,
     sqlite,
     db,
+    checkpoint: (mode = 'PASSIVE') => checkpointWal(sqlite, mode),
+    startAutoCheckpoint,
+    stopAutoCheckpoint,
+    setActivityTracker: (isBusy: () => boolean) => {
+      isBusyTracker = isBusy
+    },
   }
 }
 
@@ -87,6 +196,9 @@ export function resolveMigrationsDir(
   const candidates = [
     options.resourcesDir
       ? join(options.resourcesDir, 'db', 'migrations')
+      : null,
+    options.resourcesDir
+      ? join(options.resourcesDir, 'resources', 'db', 'migrations')
       : null,
     sourceMigrationsDir,
   ].filter((candidate): candidate is string => Boolean(candidate))

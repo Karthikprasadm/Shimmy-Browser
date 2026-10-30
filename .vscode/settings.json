@@ -7,5 +7,6 @@
     "BROWSEROS_VERSION": "properties",
     "**/BROWSEROS_BUILD_OFFSET": "properties",
     "BROWSEROS_BUILD_OFFSET": "properties"
-  }
+  },
+  "typescript.tsdk": "packages/browseros-agent/node_modules/typescript/lib"
 }

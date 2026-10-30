@@ -95,7 +95,7 @@ function createOllamaModel(config: ResolvedLLMConfig): LanguageModel {
   return createOpenAICompatible({
     ...(config.headers && { headers: config.headers }),
     name: 'ollama',
-    baseURL: config.baseUrl,
+    baseURL: config.baseUrl.trim().replace(/\/+$/, ''),
     ...(config.apiKey && { apiKey: config.apiKey }),
   })(config.model)
 }
@@ -105,7 +105,7 @@ function createLMStudioModel(config: ResolvedLLMConfig): LanguageModel {
   return createOpenAICompatible({
     ...(config.headers && { headers: config.headers }),
     name: 'lmstudio',
-    baseURL: config.baseUrl,
+    baseURL: config.baseUrl.trim().replace(/\/+$/, ''),
     ...(config.apiKey && { apiKey: config.apiKey }),
   })(config.model)
 }

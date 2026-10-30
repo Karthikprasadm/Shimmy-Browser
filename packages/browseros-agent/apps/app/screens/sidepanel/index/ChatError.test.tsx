@@ -31,13 +31,21 @@ beforeAll(async () => {
   ChatError = (await import('./ChatError')).ChatError
 })
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+
+const queryClient = new QueryClient()
+
 function renderError(error: Error, providerType = 'browseros') {
   return renderToStaticMarkup(
-    createElement(ChatError, {
-      error,
-      onRetry: () => {},
-      providerType,
-    }),
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(ChatError, {
+        error,
+        onRetry: () => {},
+        providerType,
+      }),
+    ),
   )
 }
 

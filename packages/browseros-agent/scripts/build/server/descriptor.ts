@@ -43,4 +43,5 @@ export const browserosServerBuildProduct: BuildProductDescriptor = {
     external: ['node-pty'],
     plugins: [wasmBinaryPlugin()],
   },
+  expectedArtifactFiles: () => ['resources/db/migrations/meta/_journal.json'],
 }

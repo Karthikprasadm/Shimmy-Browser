@@ -99,6 +99,22 @@ export const ChatFooter: FC<ChatFooterProps> = ({
     return () => window.removeEventListener('focus', focusInput)
   }, [])
 
+  const prevStatusRef = useRef(status)
+  useEffect(() => {
+    const wasBusy =
+      prevStatusRef.current === 'streaming' ||
+      prevStatusRef.current === 'submitted'
+    if (wasBusy && (status === 'ready' || status === 'error')) {
+      chatInputRef.current?.focus()
+    }
+    prevStatusRef.current = status
+  }, [status])
+
+  const handleStop = () => {
+    onStop()
+    chatInputRef.current?.focus()
+  }
+
   const connectedManagedServers = mcpServers.filter((s) => {
     if (s.type !== 'managed' || !s.managedServerName) return false
     return userMCPIntegrations?.integrations?.find(
@@ -217,7 +233,7 @@ export const ChatFooter: FC<ChatFooterProps> = ({
           sendDisabled={sendDisabled}
           onInputChange={onInputChange}
           onSubmit={onSubmit}
-          onStop={onStop}
+          onStop={handleStop}
           selectedTabs={attachedTabs}
           onToggleTab={onToggleTab}
           onTabMentionOpenChange={setIsTabMentionOpen}

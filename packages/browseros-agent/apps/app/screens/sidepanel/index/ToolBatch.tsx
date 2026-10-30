@@ -1,6 +1,7 @@
 import {
   BotIcon,
   CheckCircle2,
+  ChevronDownIcon,
   CircleDashed,
   Clock,
   Loader2,
@@ -56,7 +57,25 @@ export const ToolBatch: FC<ToolBatchProps> = ({
 
   return (
     <Task open={isOpen} onOpenChange={onManualToggle}>
-      <TaskTrigger title={triggerTitle} TriggerIcon={BotIcon} />
+      <TaskTrigger title={triggerTitle} TriggerIcon={BotIcon}>
+        <div className="group flex w-full cursor-pointer items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground">
+          <BotIcon className="size-4 shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate text-sm">{triggerTitle}</span>
+              <ChevronDownIcon className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-muted/60">
+              <div
+                className="h-full rounded-full bg-[var(--accent-orange)] transition-all duration-500"
+                style={{
+                  width: tools.length > 0 ? `${(completedCount / tools.length) * 100}%` : '0%',
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </TaskTrigger>
       <TaskContent>
         {tools.map((tool) => (
           <div key={tool.toolCallId}>

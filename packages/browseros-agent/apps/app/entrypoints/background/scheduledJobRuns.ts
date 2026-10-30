@@ -1,7 +1,11 @@
+import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { onScheduleMessage } from '@/lib/messaging/schedules/scheduleMessages'
 import { createAlarmFromJob } from '@/lib/schedules/createAlarmFromJob'
 import { getChatServerResponse } from '@/lib/schedules/getChatServerResponse'
-import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
+import type {
+  ScheduledJob,
+  ScheduledJobRun,
+} from '@/lib/schedules/scheduleTypes'
 import {
   listScheduledJobRunsOrNull,
   listScheduledJobsOrNull,
@@ -11,9 +15,86 @@ import {
 import { applyLastRunAt } from '@/modules/schedules/schedules.helpers'
 
 const STALE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
 
 const runAbortControllers = new Map<string, AbortController>()
+
+/**
+ * Calculates the next epoch timestamp (in ms) when a job is scheduled to run.
+ * Handles daily, hourly, and minute intervals with proper drift/sleep awareness.
+ */
+export const getNextRunTime = (
+  job: ScheduledJob,
+  now: number = Date.now(),
+): number | null => {
+  if (!job.enabled) return null
+
+  if (job.scheduleType === 'daily') {
+    if (!job.scheduleTime) return null
+    const [hours, minutes] = job.scheduleTime.split(':').map(Number)
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) return null
+
+    if (job.lastRunAt) {
+      const lastRun = new Date(job.lastRunAt)
+      const next = new Date(lastRun)
+      next.setHours(hours, minutes, 0, 0)
+      if (next.getTime() <= lastRun.getTime()) {
+        next.setDate(next.getDate() + 1)
+      }
+      return next.getTime()
+    }
+
+    // If the job has never run, base schedule off creation time
+    const created = new Date(job.createdAt).getTime()
+    const scheduledToday = new Date(now)
+    scheduledToday.setHours(hours, minutes, 0, 0)
+    // If created today after the scheduled hour, next run is tomorrow
+    if (created > scheduledToday.getTime()) {
+      scheduledToday.setDate(scheduledToday.getDate() + 1)
+    }
+    return scheduledToday.getTime()
+  }
+
+  if (job.scheduleType === 'hourly') {
+    const intervalHours = job.scheduleInterval ?? 1
+    const intervalMs = intervalHours * 60 * 60 * 1000
+    const baseTime = job.lastRunAt
+      ? new Date(job.lastRunAt).getTime()
+      : new Date(job.createdAt).getTime()
+    return baseTime + intervalMs
+  }
+
+  if (job.scheduleType === 'minutes') {
+    const intervalMinutes = job.scheduleInterval ?? 1
+    const intervalMs = intervalMinutes * 60 * 1000
+    const baseTime = job.lastRunAt
+      ? new Date(job.lastRunAt).getTime()
+      : new Date(job.createdAt).getTime()
+    return baseTime + intervalMs
+  }
+
+  return null
+}
+
+/**
+ * Verifies whether a scheduled job is due or missed (e.g. system was asleep during alarm).
+ */
+export const isJobDue = (
+  job: ScheduledJob,
+  runs: ScheduledJobRun[] = [],
+  now: number = Date.now(),
+): boolean => {
+  if (!job.enabled) return false
+
+  const hasRunningRun = runs.some(
+    (r) => r.jobId === job.id && r.status === 'running',
+  )
+  if (hasRunningRun) return false
+
+  const nextRun = getNextRunTime(job, now)
+  if (nextRun === null) return false
+
+  return nextRun <= now
+}
 
 export const scheduledJobRuns = async () => {
   // Every read below distinguishes an unreachable server from an empty list.
@@ -45,16 +126,31 @@ export const scheduledJobRuns = async () => {
   const syncAlarmState = async () => {
     const loaded = await listScheduledJobsOrNull()
     if (loaded === null) return
-    const jobs = loaded.filter((each) => each.enabled)
+    const enabledJobs = loaded.filter((each) => each.enabled)
+    const enabledJobIds = new Set(enabledJobs.map((j) => j.id))
 
-    for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i]
+    for (let i = 0; i < enabledJobs.length; i++) {
+      const job = enabledJobs[i]
       const alarmName = `scheduled-job-${job.id}`
-      const existingAlarm = await chrome.alarms.get(alarmName)
+      const existingAlarm = await chrome.alarms?.get?.(alarmName)
 
       if (!existingAlarm) {
         await createAlarmFromJob(job)
       }
+    }
+
+    try {
+      const existingAlarms = (await chrome.alarms?.getAll?.()) ?? []
+      for (const alarm of existingAlarms) {
+        if (alarm.name.startsWith('scheduled-job-')) {
+          const id = alarm.name.replace('scheduled-job-', '')
+          if (!enabledJobIds.has(id)) {
+            await chrome.alarms?.clear?.(alarm.name)
+          }
+        }
+      }
+    } catch {
+      // Non-blocking alarm inspection failure
     }
   }
 
@@ -109,12 +205,29 @@ export const scheduledJobRuns = async () => {
     const jobRun = await createJobRun(jobId, 'running')
     const abortController = new AbortController()
     runAbortControllers.set(jobRun.id, abortController)
+    const conversationId = crypto.randomUUID()
+
+    // Chrome MV3 Keep-Alive: Ping platform info every 20s to prevent Chrome from
+    // prematurely suspending the service worker while the agent executes in background.
+    const keepAliveInterval = setInterval(() => {
+      chrome.runtime?.getPlatformInfo?.().catch(() => {})
+    }, 20000)
+
+    // Track any background tab created during this scheduled execution so it can be cleaned up
+    let scheduledTabId: number | undefined
+    const onTabCreated = (tab: chrome.tabs.Tab) => {
+      if (tab.id !== undefined && !tab.active) {
+        scheduledTabId = tab.id
+      }
+    }
+    chrome.tabs?.onCreated?.addListener?.(onTabCreated)
 
     try {
       const response = await getChatServerResponse({
         message: job.query,
         signal: abortController.signal,
         providerId: job.providerId,
+        conversationId,
       })
 
       await updateJobRun(jobRun, {
@@ -139,14 +252,35 @@ export const scheduledJobRuns = async () => {
         error: errorMessage,
       })
     } finally {
+      clearInterval(keepAliveInterval)
       runAbortControllers.delete(jobRun.id)
+      chrome.tabs?.onCreated?.removeListener?.(onTabCreated)
+
+      // Scheduled Task Background Tab Cleanup: explicitly close background tab
+      if (scheduledTabId !== undefined) {
+        try {
+          await chrome.tabs.remove(scheduledTabId)
+        } catch {
+          // Tab may already have been closed by server session teardown
+        }
+      }
+
+      // Explicitly delete the session on server to close session.scheduledPageId and revoke tool leases
+      try {
+        const agentServerUrl = await getAgentServerUrl()
+        await fetch(`${agentServerUrl}/chat/${conversationId}`, {
+          method: 'DELETE',
+        }).catch(() => {})
+      } catch {
+        // Non-blocking cleanup
+      }
+
       await updateJobLastRunAt(jobId)
     }
   }
 
   let runningMissedJobs = false
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: TODO(dani) refactor to reduce complexity
   const runMissedJobs = async () => {
     if (runningMissedJobs) return
     runningMissedJobs = true
@@ -158,48 +292,38 @@ export const scheduledJobRuns = async () => {
 
       const jobs = loadedJobs.filter((j) => j.enabled)
       const now = Date.now()
-      const cutoff = now - TWENTY_FOUR_HOURS_MS
 
       for (const job of jobs) {
-        const hasRecentRun = runs.some(
-          (r) => r.jobId === job.id && new Date(r.startedAt).getTime() > cutoff,
-        )
-        if (hasRecentRun) continue
-
-        const hasRunningRun = runs.some(
-          (r) => r.jobId === job.id && r.status === 'running',
-        )
-        if (hasRunningRun) continue
-
-        if (job.scheduleType === 'daily' && job.scheduleTime) {
-          const [hours, minutes] = job.scheduleTime.split(':').map(Number)
-          const scheduledToday = new Date()
-          scheduledToday.setHours(hours, minutes, 0, 0)
-          if (now < scheduledToday.getTime()) continue
+        let isDue = isJobDue(job, runs, now)
+        if (!isDue) {
+          try {
+            const alarm = await chrome.alarms?.get?.(`scheduled-job-${job.id}`)
+            if (alarm && alarm.scheduledTime <= now) {
+              isDue = true
+            }
+          } catch {
+            // Non-blocking alarm inspection
+          }
         }
 
-        if (
-          (job.scheduleType === 'hourly' || job.scheduleType === 'minutes') &&
-          job.scheduleInterval
-        ) {
-          const intervalMs =
-            job.scheduleType === 'hourly'
-              ? job.scheduleInterval * 60 * 60 * 1000
-              : job.scheduleInterval * 60 * 1000
-          const createdAt = new Date(job.createdAt).getTime()
-          if (now - createdAt < intervalMs) continue
+        if (isDue) {
+          try {
+            await executeScheduledJob(job.id)
+          } catch {
+            // Handled and recorded in updateJobRun
+          }
         }
-
-        await executeScheduledJob(job.id)
       }
     } finally {
       runningMissedJobs = false
     }
   }
 
-  chrome.alarms.onAlarm.addListener(async (alarm) => {
+  chrome.alarms?.onAlarm?.addListener?.(async (alarm) => {
     if (!alarm.name.startsWith('scheduled-job-')) return
     const jobId = alarm.name.replace('scheduled-job-', '')
+    // Re-verify alarms state upon wake-up to keep schedules healthy
+    void syncAlarmState().catch(() => {})
     await executeScheduledJob(jobId)
   })
 
@@ -224,15 +348,25 @@ export const scheduledJobRuns = async () => {
     return { success: true }
   })
 
-  chrome.runtime.onStartup.addListener(async () => {
+  // Synchronize alarms and catch up missed jobs immediately whenever the
+  // background service worker wakes up or initializes in Chrome MV3.
+  const initializeSchedules = async () => {
     await cleanupStaleJobRuns()
     await syncAlarmState()
     await runMissedJobs()
-  })
+  }
 
-  chrome.runtime.onInstalled.addListener(async () => {
-    await cleanupStaleJobRuns()
-    await syncAlarmState()
-    await runMissedJobs()
+  void initializeSchedules().catch(() => {})
+
+  chrome.runtime?.onStartup?.addListener?.(initializeSchedules)
+  chrome.runtime?.onInstalled?.addListener?.(initializeSchedules)
+
+  // Alarms Drift Recovery: If the system sleeps (laptop lid closed) during an alarm time,
+  // Chrome skips the missed trigger. On wake-up, verify if any scheduled job's nextRun
+  // is in the past and trigger it immediately.
+  chrome.idle?.onStateChanged?.addListener?.(async (newState) => {
+    if (newState === 'active') {
+      await initializeSchedules().catch(() => {})
+    }
   })
 }

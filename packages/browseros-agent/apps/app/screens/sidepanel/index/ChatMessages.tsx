@@ -21,6 +21,7 @@ import { ChatMessageActions } from './ChatMessageActions'
 import { ConnectAppCard } from './ConnectAppCard'
 import { getMessageSegments } from './getMessageSegments'
 import { JtbdPopup } from './JtbdPopup'
+import { ModeResetNotice, type ModeSwitchNotice } from './ModeResetNotice'
 import { ScheduleSuggestionCard } from './ScheduleSuggestionCard'
 import { ToolBatch } from './ToolBatch'
 import { UserActionMessage } from './UserActionMessage'
@@ -28,6 +29,7 @@ import { UserActionMessage } from './UserActionMessage'
 export interface ChatMessagesProps {
   messages: UIMessage[]
   status: 'streaming' | 'submitted' | 'ready' | 'error'
+  modeNotices?: ModeSwitchNotice[]
   getActionForMessage?: (message: UIMessage) => ChatAction | undefined
   liked: Record<string, boolean>
   onClickLike: (messageId: string) => void
@@ -42,6 +44,7 @@ export interface ChatMessagesProps {
 export const ChatMessages: FC<ChatMessagesProps> = ({
   messages,
   status,
+  modeNotices,
   getActionForMessage,
   liked,
   disliked,
@@ -149,9 +152,23 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
                     onClickDislike={dislikeAction}
                   />
                 ) : null}
+                {modeNotices
+                  ?.filter((notice) => notice.afterMessageId === message.id)
+                  ?.map((notice) => (
+                    <ModeResetNotice key={notice.id} notice={notice} />
+                  ))}
               </Fragment>
             )
           })}
+          {modeNotices
+            ?.filter(
+              (notice) =>
+                !notice.afterMessageId ||
+                !messages.some((m) => m.id === notice.afterMessageId),
+            )
+            ?.map((notice) => (
+              <ModeResetNotice key={notice.id} notice={notice} />
+            ))}
           {showJtbdPopup && (
             <JtbdPopup
               onTakeSurvey={onTakeSurvey}
@@ -175,7 +192,7 @@ export const ChatMessages: FC<ChatMessagesProps> = ({
           </div>
         </div>
       )}
-      <div />
+      <div className="h-4" aria-hidden="true" />
     </>
   )
 }

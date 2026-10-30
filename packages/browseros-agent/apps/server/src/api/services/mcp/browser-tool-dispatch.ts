@@ -34,6 +34,10 @@ const BROWSER_TOOL_TIMEOUT_MS = 120_000
 export interface BrowserMcpLeaseScope {
   conversationId: string
   outputFileAccess: BrowserOutputFileAccess
+  recordCreatedPage?: (pageId: number) => void
+  recordClosedPage?: (pageId: number) => void
+  recordCreatedTarget?: (targetId: string) => void
+  touch?: () => void
 }
 
 export interface BrowserToolPageTrace {
@@ -111,6 +115,7 @@ export async function dispatchBrowserTool(
     ...input,
     trace: { created: new Set() },
   }
+  call.lease?.touch?.()
   const startedAt = performance.now()
   const durationMs = () => Math.round(performance.now() - startedAt)
 
@@ -123,6 +128,16 @@ export async function dispatchBrowserTool(
   try {
     const result = await executeBrowserTool(call)
     collectDeclaredPageEffects(call, result)
+    for (const pageId of call.trace.created) {
+      call.lease?.recordCreatedPage?.(pageId)
+    }
+    if (
+      call.tool.name === 'tabs' &&
+      call.args.action === 'close' &&
+      typeof call.args.page === 'number'
+    ) {
+      call.lease?.recordClosedPage?.(call.args.page)
+    }
     const effected = await runEffects({
       call,
       result,
@@ -131,6 +146,9 @@ export async function dispatchBrowserTool(
     await runObservers({ call, result: effected, durationMs: durationMs() })
     return effected
   } catch (error) {
+    for (const pageId of call.trace.created) {
+      call.lease?.recordCreatedPage?.(pageId)
+    }
     await runObservers({ call, error, durationMs: durationMs() })
     throw error
   }
@@ -194,8 +212,13 @@ async function executeBrowserTool(call: BrowserToolCall): Promise<ToolResult> {
     AbortSignal.timeout(BROWSER_TOOL_TIMEOUT_MS),
   ].filter((signal): signal is AbortSignal => signal !== undefined)
   const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
-  const session = call.run
-    ? trackBrowserSessionPages(call.context.session, call.trace, call.run)
+  const session = call.context.session?.pages
+    ? trackBrowserSessionPages(
+        call.context.session,
+        call.trace,
+        call.run,
+        call.lease,
+      )
     : call.context.session
 
   return await withBrowserOutputFileAccess(call.lease?.outputFileAccess, () =>
@@ -232,7 +255,8 @@ function collectDeclaredPageEffects(
 function trackBrowserSessionPages(
   session: BrowserSession,
   trace: BrowserToolPageTrace,
-  run: ActiveConversationRun,
+  run?: ActiveConversationRun,
+  lease?: BrowserMcpLeaseScope,
 ): BrowserSession {
   const trackedPages = new Proxy(session.pages, {
     get(target, property) {
@@ -251,13 +275,15 @@ function trackBrowserSessionPages(
             {
               ...options,
               onCreated: (tabId: number) => {
-                run.associateTabs([tabId])
+                run?.associateTabs([tabId])
                 options?.onCreated?.(tabId)
               },
             },
           ])
           if (typeof pageId === 'number') {
             trace.created.add(pageId)
+            lease?.recordCreatedPage?.(pageId)
+            lease?.touch?.()
           }
           return pageId
         }
@@ -271,6 +297,24 @@ function trackBrowserSessionPages(
       if (property === 'pages') return trackedPages
       const value = Reflect.get(target, property, target)
       if (typeof value !== 'function') return value
+      if (property === 'cdp') {
+        return async (...args: unknown[]) => {
+          const result = await Reflect.apply(value, target, args)
+          if (
+            args[0] === 'Target.createTarget' &&
+            result &&
+            typeof result === 'object' &&
+            'targetId' in result
+          ) {
+            const targetId = (result as { targetId?: unknown }).targetId
+            if (typeof targetId === 'string') {
+              lease?.recordCreatedTarget?.(targetId)
+              lease?.touch?.()
+            }
+          }
+          return result
+        }
+      }
       return value.bind(target)
     },
   })

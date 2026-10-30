@@ -1,8 +1,10 @@
 import type { Context, MiddlewareHandler } from 'hono'
 import type { Env } from '../types'
+import { LOOPBACK_HOSTS } from './cors'
 import { isLocalhostRequest } from './security'
 
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1'])
+export { LOOPBACK_HOSTS }
+
 const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:'])
 
 export function isTrustedAppOrigin(origin: string | undefined): boolean {

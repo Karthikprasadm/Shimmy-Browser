@@ -26,6 +26,8 @@ import { MCP_INSTRUCTIONS } from './mcp-prompt'
 
 export { BROWSEROS_TOOL_LEASE_HEADER } from '../../../lib/browser-tool-lease'
 
+export const DEFAULT_LEASE_INACTIVITY_TTL_MS = 30 * 60 * 1000 // 30 minutes
+
 export interface BrowserMcpModuleDeps {
   version: string
   browserSession: BrowserSession
@@ -33,6 +35,7 @@ export interface BrowserMcpModuleDeps {
   klavis?: KlavisService
   activity?: ServerActivity
   tabGroups?: Pick<ConversationTabGroups, 'addCreatedPages'>
+  leaseInactivityTtlMs?: number
 }
 
 export interface BrowserToolLeaseInput {
@@ -41,6 +44,7 @@ export interface BrowserToolLeaseInput {
   outputFileAccess: BrowserOutputFileAccess
   browserContext?: BrowserContext
   source?: string
+  inactivityTtlMs?: number
 }
 
 /**
@@ -50,7 +54,8 @@ export interface BrowserToolLeaseInput {
 export interface BrowserToolLease {
   readonly token: string
   updateBrowserContext(browserContext: BrowserContext | undefined): void
-  revoke(): void
+  touch?(): void
+  revoke(): void | Promise<void>
 }
 
 export interface CreateBrowserMcpServerInput {
@@ -61,6 +66,14 @@ export interface CreateBrowserMcpServerInput {
 
 interface LeaseRecord extends BrowserToolLeaseInput {
   token: string
+  createdPageIds: Set<number>
+  createdTargetIds: Set<string>
+  lastActivityAt: number
+  inactivityTimer?: ReturnType<typeof setTimeout>
+  touch(): void
+  recordCreatedPage(pageId: number): void
+  recordClosedPage(pageId: number): void
+  recordCreatedTarget(targetId: string): void
 }
 
 const readOnlyTabs: ToolDefinition = {
@@ -99,36 +112,179 @@ export class InvalidBrowserToolLeaseError extends Error {
 export class BrowserMcpModule {
   private readonly leases = new Map<string, LeaseRecord>()
   private readonly tabGroups: Pick<ConversationTabGroups, 'addCreatedPages'>
+  private readonly defaultInactivityTtlMs: number
 
   constructor(private readonly deps: BrowserMcpModuleDeps) {
     this.tabGroups =
       deps.tabGroups ?? new ConversationTabGroups(deps.browserSession)
+    this.defaultInactivityTtlMs =
+      deps.leaseInactivityTtlMs ?? DEFAULT_LEASE_INACTIVITY_TTL_MS
   }
 
   createLease(input: BrowserToolLeaseInput): BrowserToolLease {
-    const record: LeaseRecord = { ...input, token: crypto.randomUUID() }
+    const sessionPages = this.deps.browserSession.pages
+    const ttl = input.inactivityTtlMs ?? this.defaultInactivityTtlMs
+
+    const record: LeaseRecord = {
+      ...input,
+      token: crypto.randomUUID(),
+      createdPageIds: new Set<number>(),
+      createdTargetIds: new Set<string>(),
+      lastActivityAt: Date.now(),
+      inactivityTimer: undefined,
+      touch: () => {
+        record.lastActivityAt = Date.now()
+        if (record.inactivityTimer) {
+          clearTimeout(record.inactivityTimer)
+          record.inactivityTimer = undefined
+        }
+        if (ttl > 0 && Number.isFinite(ttl)) {
+          const timer = setTimeout(() => {
+            void this.expireLease(record)
+          }, ttl)
+          timer.unref?.()
+          record.inactivityTimer = timer
+        }
+      },
+      recordCreatedPage: (pageId: number) => {
+        record.touch()
+        record.createdPageIds.add(pageId)
+        const info = sessionPages?.getInfo?.(pageId)
+        if (info?.targetId) {
+          record.createdTargetIds.add(info.targetId)
+        }
+      },
+      recordClosedPage: (pageId: number) => {
+        record.touch()
+        record.createdPageIds.delete(pageId)
+      },
+      recordCreatedTarget: (targetId: string) => {
+        record.touch()
+        record.createdTargetIds.add(targetId)
+      },
+    }
+
+    record.touch()
     this.leases.set(record.token, record)
+
     return {
       token: record.token,
       updateBrowserContext: (browserContext) => {
         if (this.leases.get(record.token) === record) {
+          record.touch()
           record.browserContext = browserContext
         }
       },
+      touch: () => {
+        if (this.leases.get(record.token) === record) {
+          record.touch()
+        }
+      },
       // Revocation prevents new transports from recovering this capability.
-      // Existing request-scoped servers keep their captured scope; the active
-      // conversation guard remains their execution authority.
-      revoke: () => {
+      // Cleanly closes any dangling DevTools CDP targets and pages opened under this lease.
+      revoke: async () => {
         if (this.leases.get(record.token) === record) {
           this.leases.delete(record.token)
         }
+        if (record.inactivityTimer) {
+          clearTimeout(record.inactivityTimer)
+          record.inactivityTimer = undefined
+        }
+        await this.cleanupLeaseTargets(record)
       },
     }
   }
 
+  private async expireLease(record: LeaseRecord): Promise<void> {
+    if (this.leases.get(record.token) !== record) {
+      return
+    }
+    if (record.inactivityTimer) {
+      clearTimeout(record.inactivityTimer)
+      record.inactivityTimer = undefined
+    }
+    this.leases.delete(record.token)
+    logger.info(
+      'Browser tool lease expired due to inactivity; cleaning up targets',
+      {
+        token: record.token,
+        conversationId: record.conversationId,
+        createdPages: record.createdPageIds.size,
+        createdTargets: record.createdTargetIds.size,
+      },
+    )
+    await this.cleanupLeaseTargets(record)
+  }
+
+  private async cleanupLeaseTargets(record: LeaseRecord): Promise<void> {
+    const pageIds = Array.from(record.createdPageIds)
+    const targetIds = Array.from(record.createdTargetIds)
+
+    for (const pageId of pageIds) {
+      try {
+        const info = this.deps.browserSession.pages?.getInfo?.(pageId)
+        if (info?.targetId) {
+          targetIds.push(info.targetId)
+        }
+        if (typeof this.deps.browserSession.pages?.close === 'function') {
+          await this.deps.browserSession.pages.close(pageId)
+        }
+      } catch (error) {
+        logger.debug(
+          'Failed to close lease page during revocation (may already be closed)',
+          {
+            pageId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        )
+      }
+    }
+
+    const uniqueTargetIds = Array.from(new Set(targetIds))
+    const targetApi = this.deps.browserSession.protocol?.Target
+    if (targetApi && typeof targetApi.closeTarget === 'function') {
+      for (const targetId of uniqueTargetIds) {
+        try {
+          await targetApi.closeTarget({ targetId })
+        } catch (error) {
+          logger.debug(
+            'Failed to close CDP target during revocation (may already be closed)',
+            {
+              targetId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          )
+        }
+      }
+    }
+
+    record.createdPageIds.clear()
+    record.createdTargetIds.clear()
+  }
+
   /** Validates transport admission; tool dispatch never rechecks this token. */
   validateLeaseToken(token: string): void {
-    if (!this.leases.has(token)) throw new InvalidBrowserToolLeaseError()
+    const lease = this.leases.get(token)
+    if (!lease) throw new InvalidBrowserToolLeaseError()
+    lease.touch()
+  }
+
+  /** Number of active leases currently tracked in memory. */
+  getActiveLeaseCount(): number {
+    return this.leases.size
+  }
+
+  /** Clears and cleans up all tracked leases (e.g. on server shutdown). */
+  async destroy(): Promise<void> {
+    const records = Array.from(this.leases.values())
+    this.leases.clear()
+    for (const record of records) {
+      if (record.inactivityTimer) {
+        clearTimeout(record.inactivityTimer)
+        record.inactivityTimer = undefined
+      }
+    }
+    await Promise.allSettled(records.map((r) => this.cleanupLeaseTargets(r)))
   }
 
   createMcpServer(input: CreateBrowserMcpServerInput = {}) {
@@ -136,6 +292,7 @@ export class BrowserMcpModule {
       ? this.leases.get(input.leaseToken)
       : undefined
     if (input.leaseToken && !lease) throw new InvalidBrowserToolLeaseError()
+    lease?.touch()
 
     // The query may further restrict a caller but can never weaken a lease.
     const readOnly = Boolean(lease?.readOnly || input.requestedReadOnly)
@@ -195,6 +352,7 @@ export class BrowserMcpModule {
     args: Record<string, unknown>,
     context: ToolContext,
   ) {
+    lease?.touch()
     // Resolve once and carry this exact handle through execution. If another
     // turn starts before effects run, its record-identity check rejects them.
     const run = lease

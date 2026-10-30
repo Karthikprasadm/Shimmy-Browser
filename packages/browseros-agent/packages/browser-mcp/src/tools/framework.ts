@@ -77,6 +77,35 @@ export function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
 }
 
+/**
+ * Detects whether an error indicates a stale ref or detached DOM element handle.
+ */
+export function isStaleRefError(error: unknown): boolean {
+  if (!error) return false
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    /stale ref/i.test(message) ||
+    /unknown ref/i.test(message) ||
+    /stale element/i.test(message) ||
+    /detached from document/i.test(message) ||
+    /node is detached/i.test(message) ||
+    /could not find node/i.test(message) ||
+    /not found in dom/i.test(message) ||
+    /element is not attached/i.test(message) ||
+    /does not belong to the document/i.test(message) ||
+    /cannot find context with specified id/i.test(message)
+  )
+}
+
+/**
+ * Returns an actionable auto-retry hint for recovering from stale ref / handle errors.
+ */
+export function formatStaleRefHint(page?: number, ref?: string): string {
+  const target = ref ? `element ref "${ref}"` : 'the element handle'
+  const pageArg = page !== undefined ? `{ page: ${page} }` : '{ page }'
+  return `Auto-retry hint: ${target} is stale or detached because the page DOM mutated. Call snapshot(${pageArg}) to inspect the latest page state and obtain fresh element refs before retrying.`
+}
+
 export function clampTimeout(
   value: number | undefined,
   defaultMs: number,
@@ -172,9 +201,15 @@ export async function executeTool(
     throwIfAborted(ctx.signal)
   } catch (err) {
     if (ctx.signal?.aborted || isAbortError(err)) throw err
-    response.error(
-      `${def.name} failed: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    const pageId = (parsed.data as Record<string, unknown>)?.page
+    const pageNum = typeof pageId === 'number' ? pageId : undefined
+    const hint =
+      isStaleRefError(err) &&
+      !rawMessage.toLowerCase().includes('auto-retry hint')
+        ? `\n${formatStaleRefHint(pageNum)}`
+        : ''
+    response.error(`${def.name} failed: ${rawMessage}${hint}`)
   }
 
   throwIfAborted(ctx.signal)
@@ -187,8 +222,10 @@ export async function executeTool(
   const pageId = (parsed.data as Record<string, unknown>).page
   if (typeof pageId === 'number') {
     const tabId = (
-      ctx.session.pages as { getTabId?: (pageId: number) => number | undefined }
-    ).getTabId?.(pageId)
+      ctx.session?.pages as
+        | { getTabId?: (pageId: number) => number | undefined }
+        | undefined
+    )?.getTabId?.(pageId)
     if (tabId !== undefined) {
       result.metadata = { ...result.metadata, tabId }
     }

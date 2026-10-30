@@ -218,6 +218,9 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   bedrock: '',
   browseros: '',
   minimax: MINIMAX_REGIONS.chinese.api,
+  codex: '',
+  'claude-code': '',
+  'acp-custom': '',
 }
 
 /**

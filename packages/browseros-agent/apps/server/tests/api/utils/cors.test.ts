@@ -93,4 +93,26 @@ describe('isAllowedOrigin', () => {
     expect(isAllowedOrigin('chrome-extension://abc')).toBe(true)
     expect(isAllowedOrigin('')).toBe(false)
   })
+
+  it('explicitly includes [::1] (IPv6) alongside 127.0.0.1 and localhost for loopback origins', () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS = 'http://localhost:5173'
+    // Resolving localhost on Windows 11 can produce [::1] (IPv6)
+    expect(isAllowedOrigin('http://[::1]:5173')).toBe(true)
+    expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(true)
+    expect(isAllowedOrigin('http://localhost:5173')).toBe(true)
+
+    // Different port is still rejected
+    expect(isAllowedOrigin('http://[::1]:5174')).toBe(false)
+    expect(isAllowedOrigin('http://127.0.0.1:5174')).toBe(false)
+
+    // Different protocol is still rejected
+    expect(isAllowedOrigin('https://[::1]:5173')).toBe(false)
+  })
+
+  it('allows localhost and 127.0.0.1 when [::1] is configured in env', () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS = 'http://[::1]:5173'
+    expect(isAllowedOrigin('http://[::1]:5173')).toBe(true)
+    expect(isAllowedOrigin('http://localhost:5173')).toBe(true)
+    expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(true)
+  })
 })

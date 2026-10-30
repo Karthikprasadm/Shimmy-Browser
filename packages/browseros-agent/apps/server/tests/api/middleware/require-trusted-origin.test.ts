@@ -84,4 +84,27 @@ describe('requireTrustedOrigin', () => {
     })
     expect(res.status).toBe(403)
   })
+
+  it('allows Windows 11 IPv6 [::1] origin when localhost is allowlisted', async () => {
+    process.env.BROWSEROS_TRUSTED_ORIGINS = 'http://localhost:5173'
+    resetAllowedOriginsForTesting()
+
+    // Windows 11 fetch("http://localhost:5173") resolving to ::1 / [::1]
+    const resIpv6 = await buildApp().request('/probe', {
+      headers: { Origin: 'http://[::1]:5173' },
+    })
+    expect(resIpv6.status).toBe(200)
+
+    // IPv4 127.0.0.1
+    const resIpv4 = await buildApp().request('/probe', {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    })
+    expect(resIpv4.status).toBe(200)
+
+    // Port mismatch on [::1] rejected
+    const resMismatch = await buildApp().request('/probe', {
+      headers: { Origin: 'http://[::1]:5174' },
+    })
+    expect(resMismatch.status).toBe(403)
+  })
 })

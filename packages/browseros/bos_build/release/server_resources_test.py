@@ -156,7 +156,10 @@ class ServerResourceBuilderTest(unittest.TestCase):
 
     def test_bun_build_validates_builder_artifact_and_stages_current_target(self) -> None:
         output = self.agent / "dist/prod/server/linux-x64"
-        files = {"resources/bin/browseros_server": b"bun-server"}
+        files = {
+            "resources/bin/browseros_server": b"bun-server",
+            "resources/db/migrations/meta/_journal.json": b"{}",
+        }
 
         def run(command, cwd, env):
             for relative, content in files.items():
@@ -245,9 +248,14 @@ class ServerResourceBuilderTest(unittest.TestCase):
         binary.parent.mkdir(parents=True)
         binary.write_bytes(b"server")
         binary.chmod(0o755)
-        document = _metadata(
-            "0.0.128", "linux-x64", {"resources/bin/browseros_server": b"server"}
-        )
+        migration = destination / "resources/db/migrations/meta/_journal.json"
+        migration.parent.mkdir(parents=True)
+        migration.write_bytes(b"{}")
+        files = {
+            "resources/bin/browseros_server": b"server",
+            "resources/db/migrations/meta/_journal.json": b"{}",
+        }
+        document = _metadata("0.0.128", "linux-x64", files)
         document["sourceSha"] = SOURCE_SHA
         (destination / "artifact-metadata.json").write_text(json.dumps(document))
 
@@ -260,6 +268,27 @@ class ServerResourceBuilderTest(unittest.TestCase):
         )
         binary.write_bytes(b"tamper")
         with self.assertRaisesRegex(ValueError, "checksum"):
+            validate_server_resources(
+                destination,
+                product="browseros",
+                target="linux-x64",
+                version="0.0.128",
+                source_sha=SOURCE_SHA,
+            )
+
+    def test_browseros_validation_rejects_missing_migrations(self) -> None:
+        destination = self.browseros / "resources/binaries/browseros_server/linux-x64"
+        binary = destination / "resources/bin/browseros_server"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"server")
+        binary.chmod(0o755)
+        document = _metadata(
+            "0.0.128", "linux-x64", {"resources/bin/browseros_server": b"server"}
+        )
+        document["sourceSha"] = SOURCE_SHA
+        (destination / "artifact-metadata.json").write_text(json.dumps(document))
+
+        with self.assertRaisesRegex(ValueError, "missing migrations"):
             validate_server_resources(
                 destination,
                 product="browseros",

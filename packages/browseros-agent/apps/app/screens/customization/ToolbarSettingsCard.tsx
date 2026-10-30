@@ -5,6 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import { getBrowserOSAdapter } from '@/lib/browseros/adapter'
 import { Capabilities, Feature } from '@/lib/browseros/capabilities'
 import { BROWSEROS_PREFS } from '@/lib/browseros/prefs'
+import { openBrowserOSHomeOnStartupStorage } from '@/lib/startup/startup-storage'
 export type ToolbarSettingsState = {
   showLlmChat: boolean
   showToolbarLabels: boolean

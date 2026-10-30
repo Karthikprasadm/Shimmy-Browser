@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { TabPickerPopover } from '@/components/elements/tab-picker-popover'
 import type { ChatMode } from '@/modules/chat/chat-types'
+import { COMPOSER_FOCUS_EVENT } from '@/modules/chat/composer-focus'
 
 interface MentionState {
   isOpen: boolean
@@ -137,16 +138,35 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       openMentionAtCursor()
     }, [closeMention, openMentionAtCursor])
 
+    const focus = useCallback(() => {
+      const textarea = textareaRef.current
+      if (textarea) {
+        textarea.focus()
+        const len = textarea.value.length
+        textarea.setSelectionRange(len, len)
+      }
+    }, [])
+
     useImperativeHandle(
       ref,
       () => ({
         openTabMention: openMentionAtCursor,
         closeTabMention: closeMention,
         toggleTabMention: toggleMentionAtCursor,
-        focus: () => textareaRef.current?.focus(),
+        focus,
       }),
-      [closeMention, openMentionAtCursor, toggleMentionAtCursor],
+      [closeMention, focus, openMentionAtCursor, toggleMentionAtCursor],
     )
+
+    useEffect(() => {
+      const handleFocusEvent = () => {
+        focus()
+      }
+      window.addEventListener(COMPOSER_FOCUS_EVENT, handleFocusEvent)
+      return () => {
+        window.removeEventListener(COMPOSER_FOCUS_EVENT, handleFocusEvent)
+      }
+    }, [focus])
 
     const isBusy = status !== 'ready' && status !== 'error'
     const isSubmitDisabled = isBusy || sendDisabled
@@ -267,7 +287,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
           <button
             type="button"
             onClick={onStop}
-            className="cursor-pointer rounded-full bg-red-600 p-2 text-white shadow-sm transition-all duration-200 hover:bg-red-900"
+            className="cursor-pointer rounded-full bg-destructive p-2 text-destructive-foreground shadow-sm transition-all duration-200 hover:bg-destructive/85"
           >
             <SquareStop className="h-3.5 w-3.5" />
             <span className="sr-only">Stop</span>
@@ -304,6 +324,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
         {/* Reserve right padding for the overlaid send/stop button. */}
         <textarea
           ref={textareaRef}
+          data-composer-input=""
           className="field-sizing-content max-h-60 min-h-[42px] flex-1 resize-none overflow-hidden rounded-2xl border border-border/50 bg-muted/50 py-2.5 pr-11 pl-4 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 hover:border-border focus:border-[var(--accent-orange)]"
           value={input}
           onChange={(e) => handleInputChange(e.target.value)}

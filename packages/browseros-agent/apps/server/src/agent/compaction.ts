@@ -39,6 +39,10 @@ export interface CompactionBudget {
  * allowance is capped alongside it so overhead alone can never exceed the
  * threshold and pin compaction on permanently.
  *
+ * For models with contextWindow <= 16384 (e.g. 4K-8K local models), overhead
+ * is dynamically scaled down to at most 25% of the window to prevent leaving
+ * less than 1,000 tokens for user messages and triggering premature compaction.
+ *
  * `contextWindowSize` arrives from the client as a bare optional number, so a
  * zero, a negative, a fraction, or a NaN can reach here and would otherwise
  * produce a threshold that every request exceeds. The bound is `>= 1` rather
@@ -53,10 +57,16 @@ export function computeBudget(contextWindow: number): CompactionBudget {
     AGENT_LIMITS.COMPACTION_RESERVE_TOKENS,
     Math.floor(window * 0.5),
   )
-  const overhead = Math.min(
+  let overhead = Math.min(
     AGENT_LIMITS.COMPACTION_FIXED_OVERHEAD,
     Math.floor(window * 0.4),
   )
+  if (window <= AGENT_LIMITS.COMPACTION_SMALL_WINDOW_THRESHOLD) {
+    overhead = Math.min(
+      overhead,
+      Math.floor(window * AGENT_LIMITS.COMPACTION_SMALL_WINDOW_OVERHEAD_RATIO),
+    )
+  }
   return { contextWindow: window, threshold: window - reserve, overhead }
 }
 

@@ -242,10 +242,13 @@ def validate_server_resources(
     runtime_path = f"resources/bin/{bundle.runtime_binary_name}{suffix}"
     if runtime_path not in declared:
         raise ValueError(f"Server artifact is missing runtime binary {runtime_path}")
-    if target_spec.os != "windows":
+    if target_spec.os != "windows" and os.name != "nt":
         runtime = destination.joinpath(*PurePosixPath(runtime_path).parts)
         if not runtime.stat().st_mode & 0o100:
             raise ValueError(f"Server runtime is not executable: {runtime_path}")
+    if product == "browseros":
+        if "resources/db/migrations/meta/_journal.json" not in declared:
+            raise ValueError("BrowserOS server artifact is missing migrations")
     if product == "browserclaw":
         if "resources/skills/browserclaw/SKILL.md" not in declared:
             raise ValueError("BrowserOS neo server artifact is missing its skill")

@@ -23,6 +23,7 @@ export interface ThemeToggleProps {
   hideLabel?: boolean
   iconClassName?: ClassNameValue
   className?: ClassNameValue
+  title?: string
 }
 
 /**
@@ -32,6 +33,7 @@ export const ThemeToggle: FC<ThemeToggleProps> = ({
   hideLabel = true,
   iconClassName,
   className,
+  title,
 }) => {
   const { theme, setTheme } = useTheme()
 
@@ -45,6 +47,7 @@ export const ThemeToggle: FC<ThemeToggleProps> = ({
           variant="ghost"
           size={hideLabel ? 'icon' : 'default'}
           aria-label={`Current theme: ${currentTheme?.label}`}
+          title={title ?? `Theme: ${currentTheme?.label}`}
           className={cn(className)}
         >
           <CurrentIcon className={cn('h-5 w-5', iconClassName)} />

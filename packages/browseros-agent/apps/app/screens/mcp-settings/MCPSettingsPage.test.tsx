@@ -21,6 +21,19 @@ mock.module('./MCPToolsSection', () => ({
   MCPToolsSection: () => createElement('div', null, 'tools'),
 }))
 
+mock.module('@/modules/mcp/user-integrations.hooks', () => ({
+  useGetUserMCPIntegrations: () => ({
+    klavisStatus: 'connected',
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isSuccess: true,
+    isError: false,
+    error: null,
+    mutate: () => {},
+  }),
+}))
+
 mock.module('@/assets/browserclaw_logo.png', () => ({
   default: 'logo.png',
 }))

@@ -5,9 +5,13 @@
  */
 import {
   type BrowserOsDatabase,
+  checkpointWal,
   type DbHandle,
   type OpenDbOptions,
   openBrowserOsDatabase,
+  type WalAutoCheckpointConfig,
+  type WalCheckpointMode,
+  type WalCheckpointResult,
 } from './client'
 
 let handle: DbHandle | null = null
@@ -31,11 +35,26 @@ export function getDb(): BrowserOsDatabase {
   return getDbHandle().db
 }
 
+export function checkpointDb(
+  mode: WalCheckpointMode = 'PASSIVE',
+): WalCheckpointResult {
+  return getDbHandle().checkpoint(mode)
+}
+
 export function closeDb(): void {
   if (handle) {
+    handle.stopAutoCheckpoint()
     handle.sqlite.close()
     handle = null
   }
 }
 
-export type { BrowserOsDatabase, DbHandle, OpenDbOptions }
+export type {
+  BrowserOsDatabase,
+  DbHandle,
+  OpenDbOptions,
+  WalAutoCheckpointConfig,
+  WalCheckpointMode,
+  WalCheckpointResult,
+}
+export { checkpointWal }
